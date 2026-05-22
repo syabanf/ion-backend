@@ -1,0 +1,76 @@
+# golangci-lint config — minimal baseline.
+#
+# We enable only a small set of linters initially so the CI gate
+# doesn't drown the team in pre-existing findings. Add more as the
+# codebase is cleaned up:
+#
+#   1. errcheck         — catches ignored errors (the big one)
+#   2. ineffassign      — useless assignments (cheap signal)
+#   3. unused           — dead code (catches abandoned wiring)
+#   4. govet            — same as `go vet`, kept for consistency
+#   5. staticcheck      — broad correctness checks (SA-series)
+#
+# Things deliberately NOT enabled yet (to add post-cleanup):
+#   - gosimple   (lots of existing pre-style code)
+#   - revive     (style nits dominate signal)
+#   - gocyclo    (too many handlers above any reasonable threshold)
+#   - lll        (line length — would touch every file)
+#   - errorlint  (we use a custom errors package; needs config)
+
+run:
+  timeout: 3m
+  build-tags:
+    # Skip e2e-tagged files; they need a live DB to even compile-check
+    # cleanly under some lints (DB-only assertions).
+    - ""
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - ineffassign
+    - unused
+    - govet
+    - staticcheck
+
+linters-settings:
+  errcheck:
+    # We frequently use `_, _ = ...` to ignore errors from
+    # best-effort writes (notification inserts, audit log). Allow
+    # explicit underscore-assign without flagging.
+    check-blank: false
+    # Exclude common noisy patterns.
+    exclude-functions:
+      - (*github.com/jackc/pgx/v5/pgxpool.Pool).Close
+      - fmt.Fprintln
+      - fmt.Fprintf
+      - fmt.Fprint
+
+  staticcheck:
+    # Default checks. SA1019 = deprecated APIs — we have a couple of
+    # those in audit/internal code that's slated for replacement;
+    # silencing here so the linter doesn't drown out other findings.
+    checks:
+      - all
+      - -SA1019
+
+issues:
+  exclude-dirs:
+    - vendor
+    - test/perf  # uses build tags, runs separately
+  exclude-rules:
+    # Test files predate this config — don't drown on errcheck/unused there.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - unused
+    # `defer tx.Rollback(ctx)` is the canonical pgx pattern. The
+    # rollback is intentionally best-effort: if Commit already
+    # succeeded the rollback no-ops; if Commit errored we'd rather
+    # surface the Commit error. The exclude-functions key doesn't
+    # match interface-method receivers cleanly, so we suppress here.
+    - linters: [errcheck]
+      source: "defer tx\\.Rollback"
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  new: false

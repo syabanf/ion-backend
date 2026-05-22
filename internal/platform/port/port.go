@@ -1,0 +1,126 @@
+// Package port defines the driving (UseCase) and driven (Repository)
+// contracts for the platform/schemas bounded context.
+//
+// Same hexagonal pattern as enterprise / identity / crm: HTTP handlers
+// depend on SchemaUseCase; the use case depends on repository
+// interfaces; postgres adapters implement those interfaces. Domain
+// types (SchemaDefinition, CustomerSchemaOverride) flow through.
+package port
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/ion-core/backend/internal/platform/domain"
+)
+
+// =====================================================================
+// Schema inputs / filters
+// =====================================================================
+
+type CreateSchemaInput struct {
+	Kind        domain.SchemaKind
+	Code        string
+	Name        string
+	Description string
+	Body        json.RawMessage
+	Notes       string
+	CreatedBy   *uuid.UUID
+}
+
+type UpdateSchemaDraftInput struct {
+	ID          uuid.UUID
+	Name        *string
+	Description *string
+	Body        json.RawMessage // omit / nil = no change
+	Notes       *string
+}
+
+// SchemaListFilter is the read-side filter used by both /platform/schemas
+// (operator surface) and module-level lookups (e.g. billing tick picking
+// the live published schema for a customer).
+type SchemaListFilter struct {
+	Kind   domain.SchemaKind // empty = all kinds
+	Status string            // "draft" | "published" | "superseded" | "" (all)
+	Code   string            // exact match — empty = ignore
+	Limit  int
+	Offset int
+}
+
+// =====================================================================
+// Override inputs
+// =====================================================================
+
+type UpsertOverrideInput struct {
+	CustomerID uuid.UUID
+	Kind       domain.SchemaKind
+	SchemaCode string
+	SchemaID   *uuid.UUID // optional: pin to a specific version
+	Patch      json.RawMessage
+	Reason     string
+	ValidFrom  *time.Time
+	ValidUntil *time.Time
+	CreatedBy  *uuid.UUID
+}
+
+// =====================================================================
+// SchemaUseCase
+// =====================================================================
+
+// SchemaUseCase is the single inbound port for the schema system.
+// Routes flow through here — both the operator HTTP surface and any
+// in-process consumer (billing tick, commission calc) eventually
+// resolve through ResolveSchemaForCustomer.
+type SchemaUseCase interface {
+	// --- Schemas ---
+	ListSchemas(ctx context.Context, f SchemaListFilter) ([]domain.SchemaDefinition, int, error)
+	GetSchema(ctx context.Context, id uuid.UUID) (*domain.SchemaDefinition, error)
+	CreateSchema(ctx context.Context, in CreateSchemaInput) (*domain.SchemaDefinition, error)
+	UpdateDraftSchema(ctx context.Context, in UpdateSchemaDraftInput) (*domain.SchemaDefinition, error)
+	PublishSchema(ctx context.Context, id uuid.UUID) (*domain.SchemaDefinition, error)
+	SupersedeSchema(ctx context.Context, id uuid.UUID) (*domain.SchemaDefinition, error)
+
+	// --- Overrides ---
+	ListOverridesForCustomer(ctx context.Context, customerID uuid.UUID) ([]domain.CustomerSchemaOverride, error)
+	GetOverride(ctx context.Context, customerID uuid.UUID, kind domain.SchemaKind) (*domain.CustomerSchemaOverride, error)
+	UpsertOverride(ctx context.Context, in UpsertOverrideInput) (*domain.CustomerSchemaOverride, error)
+	DeleteOverride(ctx context.Context, customerID uuid.UUID, kind domain.SchemaKind) error
+
+	// --- Resolution ---
+	// ResolveSchemaForCustomer returns the schema, optional override,
+	// and the resolved jsonb body that downstream modules should
+	// evaluate. The body is what billing/commission code will consume.
+	ResolveSchemaForCustomer(
+		ctx context.Context, customerID uuid.UUID, kind domain.SchemaKind,
+	) (resolved json.RawMessage, schema *domain.SchemaDefinition, override *domain.CustomerSchemaOverride, err error)
+}
+
+// =====================================================================
+// Repositories
+// =====================================================================
+
+type SchemaRepository interface {
+	Create(ctx context.Context, s *domain.SchemaDefinition) error
+	Update(ctx context.Context, s *domain.SchemaDefinition) error
+	FindByID(ctx context.Context, id uuid.UUID) (*domain.SchemaDefinition, error)
+	// FindLatestPublished returns the active published schema for a
+	// (kind, code) pair, or NotFound. Used both by ResolveForCustomer
+	// (when the override pin is nil) and by Publish to find the prior
+	// row to supersede.
+	FindLatestPublished(ctx context.Context, kind domain.SchemaKind, code string) (*domain.SchemaDefinition, error)
+	// MaxVersion returns the highest version_no for (kind, code). Used
+	// to assign the next draft's version when an operator creates a
+	// schema with a code that already exists.
+	MaxVersion(ctx context.Context, kind domain.SchemaKind, code string) (int, error)
+	List(ctx context.Context, f SchemaListFilter) ([]domain.SchemaDefinition, int, error)
+}
+
+type OverrideRepository interface {
+	Upsert(ctx context.Context, o *domain.CustomerSchemaOverride) error
+	FindByCustomerAndKind(ctx context.Context, customerID uuid.UUID, kind domain.SchemaKind) (*domain.CustomerSchemaOverride, error)
+	ListByCustomer(ctx context.Context, customerID uuid.UUID) ([]domain.CustomerSchemaOverride, error)
+	Delete(ctx context.Context, customerID uuid.UUID, kind domain.SchemaKind) error
+}

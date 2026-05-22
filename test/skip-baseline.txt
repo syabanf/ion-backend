@@ -1,0 +1,34 @@
+# Baseline count of t.Skip / t.Skipf / t.SkipNow calls across the
+# backend test suites. The CI step `skip-baseline` in .github/workflows/ci.yml
+# greps the current count and fails if it exceeds this number.
+#
+# Why this exists (Wave 48):
+#   A `t.Skip("seed missing for query")` silently passes a test when
+#   the precondition isn't met. Adding new skips without thought
+#   means coverage rots quietly. This ratchet forces an explicit
+#   acknowledgment + comment for any new skip.
+#
+# Lowering this number is encouraged. Raising it requires a comment
+# in the PR explaining why a new skip is genuinely the right call
+# (vs. fixing the underlying precondition or making setup explicit).
+#
+# Composition of the current 2 (as of Wave 54 commit):
+#   * test/e2e/radius_lifecycle_e2e_test.go — 1 hard skip (FOLLOWUP-WAVE-48,
+#     three documented gaps requiring live-stack investigation).
+#   * test/e2e/p1p2_endpoints_test.go:117 — pickFirst() fallthrough for
+#     tables outside the auto-fixture path (crm.customers + field.work_orders
+#     are auto-fixtured via ensureSharedCustomer / ensureSharedWOID;
+#     other tables still skip with FOLLOWUP-WAVE-52 marker until those
+#     test sites need explicit fixtures).
+#
+# History:
+#   Wave 48: 12 baseline established
+#   Wave 52: 12 → 5 — converted CI-guaranteed env/seed-presence skips
+#            to t.Fatal (Wave 47 master-data, PORTAL_DEV_OTP,
+#            CRM_PORTAL_OTP_DEMO, seed-demo users)
+#   Wave 53:  5 → 3 — pickFirst on crm.customers + field.work_orders
+#            now auto-fixtures via ensureSharedCustomer / ensureSharedWOID
+#   Wave 54:  3 → 2 — TestP1P2_GPSStreaming now auto-fixtures via
+#            ensureWOAssignedToTech (walks WO through route + assign
+#            with tech@ion.local as lead technician)
+2

@@ -1,0 +1,3363 @@
+openapi: 3.0.3
+info:
+  title: ION Core API
+  version: "5.0"
+  description: |
+    HTTP surface for ION Core, an Indonesian ISP enterprise management
+    platform. Routes are grouped by the bounded context that serves
+    them (identity / crm / billing / field / network / warehouse /
+    enterprise / portal).
+
+    Authentication: JWT via `Authorization: Bearer <token>`. Tokens
+    are minted by `/api/identity/auth/login` for staff or by the OTP
+    flow under `/portal/auth/*` for customers. Public endpoints under
+    `/portal/public/*` accept no token but are rate-limited.
+
+servers:
+  - url: http://localhost:8080
+    description: local dev (api-gateway)
+
+# -----------------------------------------------------------------
+# Shared components
+# -----------------------------------------------------------------
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, kind, message]
+          properties:
+            code: { type: string, example: lead.id_invalid }
+            kind: { type: string, enum: [validation, unauthorized, forbidden, not_found, conflict, internal] }
+            message: { type: string }
+
+    # ── Portal-mobile contract types ─────────────────────────────
+    # These are consumed by the customer Flutter app under
+    # mobile/customer_app/. Keep them stable — schema breakage
+    # ships as a forced-update prompt on the mobile side.
+
+    PortalAuthToken:
+      type: object
+      required: [token, expires_at]
+      properties:
+        token:      { type: string, description: "JWT for /portal/* calls" }
+        expires_at: { type: string, format: date-time }
+        customer_id: { type: string, format: uuid }
+
+    PortalCustomer:
+      type: object
+      required: [id, customer_number, full_name, phone, status]
+      properties:
+        id:              { type: string, format: uuid }
+        customer_number: { type: string, example: "CUST-2026-00042" }
+        full_name:       { type: string }
+        phone:           { type: string }
+        email:           { type: string }
+        address:         { type: string }
+        status:
+          type: string
+          enum: [active, suspended, terminated, pending]
+        branch_id:       { type: string }
+
+    PortalServicePlan:
+      type: object
+      required: [code, name, speed_mbps, monthly_price]
+      properties:
+        code:          { type: string, example: BB_100M }
+        name:          { type: string }
+        speed_mbps:    { type: integer }
+        monthly_price: { type: number, format: float }
+
+    PortalAddon:
+      type: object
+      required: [code, name, addon_type, status, quantity, monthly_fee]
+      properties:
+        code:         { type: string }
+        name:         { type: string }
+        addon_type:   { type: string, example: static_ip }
+        status:
+          type: string
+          enum: [pending, active, cancelled]
+        quantity:     { type: integer }
+        monthly_fee:  { type: number, format: float }
+        requested_at: { type: string, format: date-time }
+        activated_at: { type: string, format: date-time }
+
+    PortalServicesResponse:
+      type: object
+      properties:
+        plan: { $ref: "#/components/schemas/PortalServicePlan" }
+        addons:
+          type: array
+          items: { $ref: "#/components/schemas/PortalAddon" }
+        radius_state:
+          type: string
+          enum: [ACTIVE, SUSPENDED, DEACTIVATED, UNKNOWN]
+
+    PortalInvoice:
+      type: object
+      required: [id, invoice_number, status, total_amount, currency, due_at]
+      properties:
+        id:             { type: string, format: uuid }
+        invoice_number: { type: string, example: "INV-2026-00099" }
+        status:
+          type: string
+          enum: [draft, issued, paid, void, overdue]
+        subtotal_amount: { type: number, format: float }
+        tax_amount:      { type: number, format: float }
+        total_amount:    { type: number, format: float }
+        currency:        { type: string, example: IDR }
+        issued_at:       { type: string, format: date-time }
+        due_at:          { type: string, format: date-time }
+        paid_at:         { type: string, format: date-time }
+
+    PortalPaymentIntent:
+      type: object
+      required: [intent_id, status, amount, currency]
+      properties:
+        intent_id:    { type: string }
+        status:       { type: string, enum: [pending, paid, expired, cancelled] }
+        amount:       { type: number, format: float }
+        currency:     { type: string, example: IDR }
+        va_number:    { type: string, description: "Indonesian virtual-account number (if VA)" }
+        checkout_url: { type: string, description: "Hosted Xendit checkout link" }
+        expires_at:   { type: string, format: date-time }
+
+    PortalNotification:
+      type: object
+      required: [id, kind, title, body, created_at]
+      properties:
+        id:        { type: string, format: uuid }
+        kind:
+          type: string
+          enum: [ticket_reply, bast_scheduled, payment_succeeded, sla_breach, plan_change, system]
+        title:     { type: string }
+        body:      { type: string }
+        deep_link: { type: string }
+        data:      { type: object, additionalProperties: true }
+        read_at:   { type: string, format: date-time }
+        created_at:{ type: string, format: date-time }
+
+    PortalNotificationsResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/PortalNotification" }
+        unread_count: { type: integer }
+
+    PortalTicket:
+      type: object
+      required: [id, ticket_number, category, status, priority, summary, opened_at]
+      properties:
+        id:            { type: string, format: uuid }
+        ticket_number: { type: string, example: "TKT-20260520-a1b2c3d4" }
+        category:
+          type: string
+          enum: [slow_speed, no_internet, equipment_damage, billing_dispute, general, plan_change]
+        priority:      { type: string, enum: [low, medium, high] }
+        status:
+          type: string
+          enum: [open, in_progress, resolved, closed]
+        summary:       { type: string }
+        description:   { type: string }
+        opened_at:     { type: string, format: date-time }
+        resolved_at:   { type: string, format: date-time }
+        csat_score:    { type: integer, minimum: 1, maximum: 5 }
+
+    PortalTicketMessage:
+      type: object
+      required: [id, author_kind, body, created_at]
+      properties:
+        id:          { type: string, format: uuid }
+        author_kind: { type: string, enum: [agent, customer, system] }
+        body:        { type: string }
+        attachments:
+          type: array
+          items: { type: string, description: "Object URL of attached photo" }
+        is_internal_note: { type: boolean, description: "Always false on customer-visible reads" }
+        created_at:  { type: string, format: date-time }
+
+    PortalCoverageVerdict:
+      type: object
+      required: [verdict, cable_distance_m]
+      properties:
+        verdict:
+          type: string
+          enum: [covered, covered_with_excess, no_coverage]
+        nearest_node_id:   { type: string, format: uuid }
+        nearest_node_name: { type: string }
+        cable_distance_m:  { type: number, format: float, description: "Approx route distance (haversine × 1.25)" }
+        excess_charge:     { type: number, format: float, description: "IDR, only set when verdict=covered_with_excess" }
+
+    PortalSelfOrderRequest:
+      type: object
+      required: [full_name, phone, address]
+      properties:
+        full_name:           { type: string }
+        phone:               { type: string }
+        email:               { type: string }
+        address:             { type: string }
+        gps_lat:             { type: number, format: float }
+        gps_lng:             { type: number, format: float }
+        product_id:          { type: string, format: uuid }
+        nearest_node_id:     { type: string, format: uuid }
+        cable_distance_m:    { type: number, format: float }
+        accept_excess_cable: { type: boolean }
+        notes:               { type: string }
+
+    PortalSelfOrderResponse:
+      type: object
+      required: [id, lead_number, status]
+      properties:
+        id:          { type: string, format: uuid }
+        lead_number: { type: string, example: "LD-20260520-a1b2c3d4" }
+        status:      { type: string, enum: [new] }
+        assigned:    { type: boolean }
+        next_steps:  { type: string }
+
+    PortalDeviceTokenRequest:
+      type: object
+      required: [token, platform]
+      properties:
+        token:    { type: string, description: "FCM/APNS device token" }
+        platform: { type: string, enum: [ios, android] }
+        app:      { type: string, example: customer }
+
+    PortalKTPUploadRequest:
+      type: object
+      required: [front_url]
+      properties:
+        front_url: { type: string, description: "Pre-uploaded object URL from /api/uploads/photos" }
+        back_url:  { type: string }
+        reason:    { type: string, description: "Why the re-upload" }
+
+    PortalOTPRequest:
+      type: object
+      required: [customer_number]
+      properties:
+        customer_number: { type: string, example: "CUST-2026-00042" }
+        phone_last4:     { type: string, minLength: 4, maxLength: 4 }
+        email:           { type: string }
+
+    PortalOTPVerify:
+      type: object
+      required: [customer_number, code]
+      properties:
+        customer_number: { type: string }
+        code:            { type: string, minLength: 4, maxLength: 8 }
+
+    PortalRefreshRequest:
+      type: object
+      properties:
+        # Refresh tokens live in an httpOnly cookie; the body is empty.
+
+    # ── Field / Work-orders contract types (tech mobile + dashboard) ─
+    # The Flutter tech_app + the web NOC dashboard consume these.
+    # Field handlers all use the same DTO shape from
+    # backend/internal/field/adapter/http/dto.go — keep these aligned.
+
+    WorkOrder:
+      type: object
+      required: [id, wo_number, customer_id, wo_type, product_type, address, priority, status, is_emergency, is_cross_area, created_at]
+      properties:
+        id:                   { type: string, format: uuid }
+        wo_number:            { type: string, example: "WO-20260520-a1b2c3d4" }
+        order_id:             { type: string, format: uuid }
+        customer_id:          { type: string, format: uuid }
+        wo_type:
+          type: string
+          enum: [new_installation, maintenance, termination, relocation, plan_change]
+        product_type:         { type: string, example: broadband }
+        maintenance_subtype:  { type: string, example: equipment_damage }
+        address:              { type: string }
+        branch_id:            { type: string, format: uuid }
+        branch_name:          { type: string }
+        branch_code:          { type: string }
+        priority:             { type: string, enum: [low, medium, high, urgent] }
+        status:
+          type: string
+          enum: [unassigned, assigned, dispatched, in_progress, completed, cancelled, on_hold]
+        scheduled_date:       { type: string, format: date-time }
+        sla_due_at:           { type: string, format: date-time }
+        team_id:              { type: string, format: uuid }
+        team_name:            { type: string }
+        team_leader_id:       { type: string, format: uuid }
+        team_leader_name:     { type: string }
+        is_emergency:         { type: boolean }
+        is_cross_area:        { type: boolean }
+        notes:                { type: string }
+        created_at:           { type: string, format: date-time }
+
+    WorkOrderListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/WorkOrder" }
+        total:     { type: integer }
+        page:      { type: integer }
+        page_size: { type: integer }
+
+    Assignment:
+      type: object
+      required: [id, technician_id, grade, wo_role, assigned_at]
+      properties:
+        id:               { type: string, format: uuid }
+        technician_id:    { type: string, format: uuid }
+        technician_name:  { type: string }
+        technician_email: { type: string }
+        grade:            { type: string, enum: [junior, senior, lead] }
+        wo_role:          { type: string, enum: [primary, secondary, observer] }
+        assigned_at:      { type: string, format: date-time }
+
+    ChecklistItem:
+      type: object
+      required: [id, item_order, item_type, label, required]
+      properties:
+        id:                   { type: string, format: uuid }
+        item_order:           { type: integer }
+        item_type:
+          type: string
+          enum: [photo, text, number, checkbox, qr_scan, signature, gps_location, optical_power, speedtest]
+        label:                { type: string }
+        required:             { type: boolean }
+        photo_tag:            { type: string, description: "Photo tag for before/after grouping" }
+        gps_required:         { type: boolean }
+        min_accuracy_meters:  { type: integer }
+
+    ChecklistResponse:
+      type: object
+      required: [id, wo_id, template_item_id]
+      properties:
+        id:               { type: string, format: uuid }
+        wo_id:            { type: string, format: uuid }
+        template_item_id: { type: string, format: uuid }
+        response_text:    { type: string, description: "Encoded value — for item_type=speedtest, format is 'down=X|up=Y|ping_ms=Z'" }
+        file_url:         { type: string }
+        gps_lat:          { type: number, format: float }
+        gps_lng:          { type: number, format: float }
+        gps_accuracy_m:   { type: number, format: float }
+        submitted_at:     { type: string, format: date-time }
+
+    BAST:
+      type: object
+      required: [id, wo_id, sign_off_mode, status, submitted_at]
+      properties:
+        id:                  { type: string, format: uuid }
+        wo_id:               { type: string, format: uuid }
+        sign_off_mode:       { type: string, enum: [on_site, otp_remote] }
+        status:
+          type: string
+          enum: [pending_noc_verify, verified, rejected]
+        customer_sig_url:    { type: string, description: "Object URL of the customer's signature PNG (on-site mode)" }
+        gps_lat:             { type: number, format: float }
+        gps_lng:             { type: number, format: float }
+        submitted_at:        { type: string, format: date-time }
+        verified_at:         { type: string, format: date-time }
+        rejection_reason:    { type: string }
+
+    BASTSubmission:
+      type: object
+      required: [sign_off_mode]
+      properties:
+        sign_off_mode:    { type: string, enum: [on_site, otp_remote] }
+        customer_sig_url: { type: string, description: "Required when sign_off_mode=on_site" }
+        otp_code:         { type: string, description: "Required when sign_off_mode=otp_remote" }
+        gps_lat:          { type: number, format: float }
+        gps_lng:          { type: number, format: float }
+
+    ChecklistSubmission:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [template_item_id]
+            properties:
+              template_item_id: { type: string, format: uuid }
+              response_text:    { type: string }
+              file_url:         { type: string }
+              gps_lat:          { type: number, format: float }
+              gps_lng:          { type: number, format: float }
+              gps_accuracy_m:   { type: number, format: float }
+
+    AssignWORequest:
+      type: object
+      required: [team_id]
+      properties:
+        team_id:       { type: string, format: uuid }
+        scheduled_date: { type: string, format: date-time }
+
+    StatusWORequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [in_progress, on_hold, completed, cancelled]
+        notes: { type: string }
+
+    RescheduleRequest:
+      type: object
+      required: [new_scheduled_date, reason]
+      properties:
+        new_scheduled_date: { type: string, format: date-time }
+        reason:             { type: string }
+
+    Reschedule:
+      type: object
+      properties:
+        id:                 { type: string, format: uuid }
+        wo_id:              { type: string, format: uuid }
+        previous_date:      { type: string, format: date-time }
+        new_scheduled_date: { type: string, format: date-time }
+        reason:             { type: string }
+        requested_by:       { type: string, format: uuid }
+        created_at:         { type: string, format: date-time }
+
+    SLABreach:
+      type: object
+      properties:
+        wo_id:        { type: string, format: uuid }
+        wo_number:    { type: string }
+        breached_at:  { type: string, format: date-time }
+        hours_over:   { type: number, format: float }
+        priority:     { type: string }
+
+security:
+  - bearerAuth: []
+
+# -----------------------------------------------------------------
+# Paths
+# -----------------------------------------------------------------
+
+paths:
+
+  # ── Identity ──────────────────────────────────────────────────
+  /api/identity/auth/login:
+    post:
+      tags: [identity]
+      summary: Staff login → JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: token pair
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  refresh_token: { type: string }
+
+  # ── CRM lead events + CS referral ─────────────────────────────
+  /api/crm/leads/{id}/events:
+    get:
+      tags: [crm]
+      summary: Lead interaction timeline
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: timeline rows ordered newest-first
+
+  /api/crm/leads/overdue:
+    get:
+      tags: [crm]
+      summary: Leads with no activity in N days
+      parameters:
+        - in: query
+          name: mine
+          schema: { type: boolean }
+        - in: query
+          name: days
+          schema: { type: integer, default: 7 }
+      responses:
+        "200":
+          description: overdue leads
+
+  /api/crm/cs-referrals:
+    post:
+      tags: [crm]
+      summary: CS agent → sales lead with source=cs_referral
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name: { type: string }
+                phone: { type: string }
+                address: { type: string }
+                ticket_id: { type: string }
+      responses:
+        "201":
+          description: created
+
+  /api/crm/sales/pipeline-revenue:
+    get:
+      tags: [crm]
+      summary: Open + weighted pipeline value
+      parameters:
+        - in: query
+          name: mine
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: ok
+
+  /api/crm/sales/my-quota:
+    get:
+      tags: [crm]
+      summary: Caller's monthly quota progress
+      responses:
+        "200":
+          description: ok
+
+  /api/crm/sales/leaderboard:
+    get:
+      tags: [crm]
+      summary: Top-performing reps this month
+      responses:
+        "200":
+          description: ranked list
+
+  /api/crm/commissions/mine:
+    get:
+      tags: [crm]
+      summary: Caller's commission ledger
+      responses:
+        "200":
+          description: ledger rows
+
+  # ── Field — work-orders / tickets / GPS ───────────────────────
+  /api/field/work-orders/{id}/tech-locations:
+    get:
+      tags: [field]
+      summary: GPS pings for a WO (ordered ascending)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+
+  /api/field/tech-locations:
+    post:
+      tags: [field]
+      summary: Tech submits a single GPS ping
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                wo_id: { type: string, format: uuid }
+                lat: { type: number }
+                lng: { type: number }
+                accuracy_m: { type: number }
+    get:
+      tags: [field]
+      summary: Team Leader live feed
+      parameters:
+        - in: query
+          name: active_only
+          schema: { type: boolean }
+        - in: query
+          name: since
+          schema: { type: string, format: date-time }
+
+  /api/field/work-orders/{id}/journey/start:
+    post:
+      tags: [field]
+      summary: Tech taps "Start journey" (sets journey_started_at)
+  /api/field/work-orders/{id}/journey/arrived:
+    post:
+      tags: [field]
+      summary: Tech taps "Arrived" (sets arrived_at)
+  /api/field/work-orders/{id}/ont-config:
+    get:
+      tags: [field]
+      summary: ONT credentials — scoped to assigned tech only
+  /api/field/work-orders/{id}/suggested-pair:
+    get:
+      tags: [field]
+      summary: Auto-pair senior+junior tech suggestion
+  /api/field/work-orders/{id}/cross-area:
+    post:
+      tags: [field]
+      summary: Flag WO for cross-area dispatch
+
+  /api/field/tickets:
+    get:
+      tags: [field]
+      summary: CS ticket list (staff view)
+  /api/field/tickets/{id}/messages:
+    get:
+      tags: [field]
+      summary: Conversation timeline
+    post:
+      tags: [field]
+      summary: Staff agent reply (supports attachments)
+
+  /api/field/priority-insertions/mine:
+    get:
+      tags: [field]
+      summary: Tech's pending priority WOs
+
+  # ── Enterprise CPQ ────────────────────────────────────────────
+  /api/enterprise/services-catalog:
+    get:
+      tags: [enterprise]
+      summary: Service catalog (with default SLA template binding)
+  /api/enterprise/services-catalog/{id}/sla:
+    patch:
+      tags: [enterprise]
+      summary: Bind / unbind default SLA template
+
+  /api/enterprise/projects/{id}/scurve:
+    get:
+      tags: [enterprise]
+      summary: Daily-bucket S-Curve (planned vs actual)
+  /api/enterprise/projects/{id}/milestones:
+    get:
+      tags: [enterprise]
+      summary: Project milestones list
+  /api/enterprise/projects/{id}/plan-revisions:
+    get:
+      tags: [enterprise]
+      summary: Plan-revision history
+    post:
+      tags: [enterprise]
+      summary: Capture a new revision snapshot
+
+  /api/enterprise/vendor-benchmarks:
+    get:
+      tags: [enterprise]
+      summary: Per-SKU vendor cost benchmark
+  /api/enterprise/vendor-metrics:
+    get:
+      tags: [enterprise]
+      summary: Current-month vendor scorecard
+  /api/enterprise/vendors/{id}/documents:
+    get:
+      tags: [enterprise]
+      summary: List vendor onboarding documents
+    post:
+      tags: [enterprise]
+      summary: Upload a vendor document
+  /api/enterprise/vendor-documents/{id}/verify:
+    post:
+      tags: [enterprise]
+      summary: Verify a vendor document
+
+  /api/enterprise/opportunities/{id}/forecast:
+    get:
+      tags: [enterprise]
+      summary: Stage-probability revenue forecast
+
+  # ── Billing ───────────────────────────────────────────────────
+  /api/billing/terminations/consolidated:
+    get:
+      tags: [billing]
+      summary: Union of billing.termination_requests + portal tickets
+  /api/billing/webhook-deliveries:
+    get:
+      tags: [billing]
+      summary: Inbound webhook delivery log
+  /api/billing/webhook-deliveries/{id}:
+    get:
+      tags: [billing]
+      summary: Single webhook delivery with body preview
+  /api/billing/webhooks/xendit:
+    post:
+      tags: [billing]
+      summary: Xendit payment callback (HMAC + IP allow-list verified)
+      security: []
+
+  # ── Warehouse ─────────────────────────────────────────────────
+  /api/warehouse/stock-dashboard:
+    get:
+      tags: [warehouse]
+      summary: Cross-warehouse stock roll-up
+  /api/warehouse/stock-dashboard/alerts:
+    get:
+      tags: [warehouse]
+      summary: Low-stock alerts feed
+  /api/warehouse/opname-rollup:
+    get:
+      tags: [warehouse]
+      summary: Cross-warehouse opname progress
+
+  # ── Network ───────────────────────────────────────────────────
+  /api/network/customers/{id}/radius-state:
+    get:
+      tags: [network]
+      summary: Live RADIUS session state per customer
+
+  # ── Identity / HRIS ───────────────────────────────────────────
+  /api/identity/hris/sync-state:
+    get:
+      tags: [identity]
+      summary: HRIS sync state by provider
+  /api/identity/hris/sync-now:
+    post:
+      tags: [identity]
+      summary: Trigger an immediate HRIS sync
+  /api/identity/device-token:
+    post:
+      tags: [identity]
+      summary: Register a staff push token
+
+  # ── Portal — customer-facing (Flutter customer_app contract) ──
+  # The schemas here ARE the contract — the mobile app consumes them
+  # directly. Treat any breaking change as a forced-upgrade event.
+
+  /portal/public/coverage-check:
+    post:
+      tags: [portal-public]
+      summary: Coverage check for a prospective customer
+      description: |
+        Public + rate-limited (60/min/IP). Given a GPS pair, returns
+        whether the address is inside ION's broadband footprint and
+        if so, whether excess-cable charges apply.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lat, lng]
+              properties:
+                lat: { type: number, format: float }
+                lng: { type: number, format: float }
+      responses:
+        "200":
+          description: Verdict
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalCoverageVerdict" }
+        "400": { description: Missing / invalid lat/lng }
+        "429": { description: Rate-limit exceeded }
+
+  /portal/public/products:
+    get:
+      tags: [portal-public]
+      summary: Public products list
+      description: Rate-limited 120/min/IP.
+      security: []
+      responses:
+        "200":
+          description: Products
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/PortalServicePlan" }
+
+  /portal/public/self-order:
+    post:
+      tags: [portal-public]
+      summary: Self-order lead create
+      description: |
+        Drops a row in `crm.leads` with `source='self_order'`. Picks
+        a sales rep round-robin within the nearest node's branch
+        and notifies them in-app. Rate-limited 20/h/IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PortalSelfOrderRequest" }
+      responses:
+        "201":
+          description: Lead created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalSelfOrderResponse" }
+        "400": { description: Missing full_name / phone / address }
+        "429": { description: Too many self-orders from this phone in 24h }
+
+  /portal/auth/otp-request:
+    post:
+      tags: [portal]
+      summary: Customer OTP request
+      description: |
+        Sends an OTP to the customer's registered phone (via WA/SMS
+        once integrated; via log+DB in `CRM_PORTAL_OTP_DEMO=true`).
+        Returns `{sent: true}` even for unknown customer_number to
+        avoid enumeration.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PortalOTPRequest" }
+      responses:
+        "200":
+          description: OTP dispatched (or silently ignored)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sent: { type: boolean }
+
+  /portal/auth/otp-verify:
+    post:
+      tags: [portal]
+      summary: Customer OTP verify → portal token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PortalOTPVerify" }
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalAuthToken" }
+        "401": { description: Invalid or expired OTP }
+
+  /portal/me:
+    get:
+      tags: [portal]
+      summary: Customer profile
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalCustomer" }
+        "401": { description: Unauthorized }
+
+  /portal/services:
+    get:
+      tags: [portal]
+      summary: Subscribed services + add-ons + RADIUS state
+      responses:
+        "200":
+          description: Services bundle
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalServicesResponse" }
+        "401": { description: Unauthorized }
+
+  /portal/invoices:
+    get:
+      tags: [portal]
+      summary: Customer invoice list (newest first)
+      responses:
+        "200":
+          description: Invoices
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/PortalInvoice" }
+
+  /portal/invoices/{id}/pdf:
+    get:
+      tags: [portal]
+      summary: Invoice PDF (real gofpdf-rendered)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: PDF stream
+          content:
+            application/pdf: {}
+        "404": { description: Invoice not found or not owned by this customer }
+
+  /portal/invoices/{id}/faktur-pajak:
+    get:
+      tags: [portal]
+      summary: Faktur Pajak number + download URL
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Faktur metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  number:        { type: string }
+                  download_url:  { type: string }
+                  issued_at:     { type: string, format: date-time }
+        "404": { description: No faktur for this invoice yet }
+
+  /portal/invoices/{id}/pay:
+    post:
+      tags: [portal]
+      summary: Initiate Xendit-shaped payment intent
+      description: |
+        Creates a payment intent (idempotent on `invoice_id`). The
+        response is provider-agnostic — the Xendit-shaped fields are
+        a stable subset that survives a provider swap.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                method: { type: string, enum: [va, checkout], default: va }
+      responses:
+        "201":
+          description: Payment intent created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalPaymentIntent" }
+        "409": { description: Invoice already paid }
+
+  /portal/tickets:
+    get:
+      tags: [portal]
+      summary: Customer's own tickets
+      responses:
+        "200":
+          description: Tickets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/PortalTicket" }
+    post:
+      tags: [portal]
+      summary: Open a ticket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category, summary]
+              properties:
+                category:    { type: string }
+                priority:    { type: string, enum: [low, medium, high] }
+                summary:     { type: string }
+                description: { type: string }
+      responses:
+        "201":
+          description: Ticket created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalTicket" }
+
+  /portal/tickets/{id}:
+    get:
+      tags: [portal]
+      summary: Ticket detail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Ticket
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalTicket" }
+        "404": { description: Not found / not owned }
+
+  /portal/tickets/{id}/messages:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [portal]
+      summary: Conversation timeline (excludes internal notes)
+      responses:
+        "200":
+          description: Messages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/PortalTicketMessage" }
+    post:
+      tags: [portal]
+      summary: Customer reply (with optional photo attachments)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body:        { type: string }
+                attachments:
+                  type: array
+                  items: { type: string, description: "Object URL from /api/uploads/photos" }
+      responses:
+        "201":
+          description: Message persisted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+
+  /portal/tickets/{id}/csat:
+    post:
+      tags: [portal]
+      summary: Submit CSAT (1-5) + optional comment
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [score]
+              properties:
+                score:   { type: integer, minimum: 1, maximum: 5 }
+                comment: { type: string }
+      responses:
+        "200": { description: Recorded }
+        "409": { description: CSAT already submitted for this ticket }
+
+  /portal/notifications:
+    get:
+      tags: [portal]
+      summary: Customer notification inbox + unread_count
+      responses:
+        "200":
+          description: Inbox
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalNotificationsResponse" }
+
+  /portal/notifications/{id}/read:
+    post:
+      tags: [portal]
+      summary: Mark one notification read
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Marked }
+
+  /portal/notifications/mark-all-read:
+    post:
+      tags: [portal]
+      summary: Mark every unread notification read
+      responses:
+        "200":
+          description: Marked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  marked: { type: integer }
+
+  /portal/active-wo/tech-location:
+    get:
+      tags: [portal]
+      summary: Live tech location for the customer's active WO
+      description: |
+        Returns the most recent GPS ping (within 10 min) from the
+        technician assigned to the customer's active install /
+        maintenance WO. Used by the live-tracking card.
+      responses:
+        "200":
+          description: Latest fix
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  has_active_wo: { type: boolean }
+                  wo_number:     { type: string }
+                  tech_name:     { type: string }
+                  lat:           { type: number, format: float }
+                  lng:           { type: number, format: float }
+                  captured_at:   { type: string, format: date-time }
+                  eta_minutes:   { type: integer, description: "Heuristic ETA from distance + avg speed" }
+
+  /portal/ktp:
+    post:
+      tags: [portal]
+      summary: KTP re-upload (drops a CS ticket for verification)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PortalKTPUploadRequest" }
+      responses:
+        "201":
+          description: Ticket opened for review
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ticket_id:     { type: string, format: uuid }
+                  ticket_number: { type: string }
+
+  /portal/device-token:
+    post:
+      tags: [portal]
+      summary: Register a customer push token (FCM/APNS)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PortalDeviceTokenRequest" }
+      responses:
+        "200": { description: Registered (idempotent on token) }
+# AUTO-GENERATED STUBS — minimal entries for paths that exist in
+# the chi router but didn't have an OpenAPI entry yet. Schemas are
+# intentionally generic; flesh them out as you touch each path.
+  /api/billing/commissions:
+    get:
+      summary: "GET /api/billing/commissions"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/cycles:
+    get:
+      summary: "GET /api/billing/cycles"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/cycles/run:
+    post:
+      summary: "POST /api/billing/cycles/run"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/invoices:
+    get:
+      summary: "GET /api/billing/invoices"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/billing/invoices"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/invoices/{id}:
+    get:
+      summary: "GET /api/billing/invoices/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/invoices/{id}/cancel:
+    post:
+      summary: "POST /api/billing/invoices/{id}/cancel"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/invoices/{id}/issue:
+    post:
+      summary: "POST /api/billing/invoices/{id}/issue"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/invoices/{id}/payments:
+    post:
+      summary: "POST /api/billing/invoices/{id}/payments"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/orders/{id}/otc-status:
+    get:
+      summary: "GET /api/billing/orders/{id}/otc-status"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/policy:
+    get:
+      summary: "GET /api/billing/policy"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/billing/policy"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/referral-rewards:
+    get:
+      summary: "GET /api/billing/referral-rewards"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/terminations:
+    get:
+      summary: "GET /api/billing/terminations"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/billing/terminations"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/terminations/{id}:
+    get:
+      summary: "GET /api/billing/terminations/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/billing/terminations/{id}/cancel:
+    post:
+      summary: "POST /api/billing/terminations/{id}/cancel"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/addons:
+    get:
+      summary: "GET /api/crm/addons"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/customers:
+    get:
+      summary: "GET /api/crm/customers"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/customers/{id}:
+    get:
+      summary: "GET /api/crm/customers/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/customers/{id}/addons:
+    get:
+      summary: "GET /api/crm/customers/{id}/addons"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/crm/customers/{id}/addons"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/customers/{id}/plan-change:
+    post:
+      summary: "POST /api/crm/customers/{id}/plan-change"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/customers/{id}/plan-changes:
+    get:
+      summary: "GET /api/crm/customers/{id}/plan-changes"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/customers/{id}/relocation:
+    post:
+      summary: "POST /api/crm/customers/{id}/relocation"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/customers/{id}/relocations:
+    get:
+      summary: "GET /api/crm/customers/{id}/relocations"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/documents/{id}:
+    patch:
+      summary: "PATCH /api/crm/documents/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/ktp-ocr:
+    post:
+      summary: "POST /api/crm/ktp-ocr"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/leads:
+    get:
+      summary: "GET /api/crm/leads"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/crm/leads"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/leads/{id}:
+    get:
+      summary: "GET /api/crm/leads/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/crm/leads/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/leads/{id}/convert:
+    post:
+      summary: "POST /api/crm/leads/{id}/convert"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/onboarding-schemas:
+    get:
+      summary: "GET /api/crm/onboarding-schemas"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/onboarding-schemas/{id}:
+    get:
+      summary: "GET /api/crm/onboarding-schemas/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/orders:
+    get:
+      summary: "GET /api/crm/orders"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/orders/{id}:
+    get:
+      summary: "GET /api/crm/orders/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/plan-changes/pending:
+    get:
+      summary: "GET /api/crm/plan-changes/pending"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/plan-changes/{id}:
+    patch:
+      summary: "PATCH /api/crm/plan-changes/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/products:
+    get:
+      summary: "GET /api/crm/products"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/crm/products"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/relocations/pending:
+    get:
+      summary: "GET /api/crm/relocations/pending"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/relocations/{id}:
+    patch:
+      summary: "PATCH /api/crm/relocations/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/crm/sales-dashboard:
+    get:
+      summary: "GET /api/crm/sales-dashboard"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/approval-instances:
+    get:
+      summary: "GET /api/enterprise/approval-instances"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/approval-instances/{id}/approve:
+    post:
+      summary: "POST /api/enterprise/approval-instances/{id}/approve"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/approval-instances/{id}/reassign:
+    post:
+      summary: "POST /api/enterprise/approval-instances/{id}/reassign"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/approval-instances/{id}/reject:
+    post:
+      summary: "POST /api/enterprise/approval-instances/{id}/reject"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/approval-templates:
+    get:
+      summary: "GET /api/enterprise/approval-templates"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/enterprise/approval-templates"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/approval-templates/{id}:
+    get:
+      summary: "GET /api/enterprise/approval-templates/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/enterprise/approval-templates/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/approval-templates/{id}/publish:
+    post:
+      summary: "POST /api/enterprise/approval-templates/{id}/publish"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/boq-lines/{id}:
+    delete:
+      summary: "DELETE /api/enterprise/boq-lines/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/enterprise/boq-lines/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/boq-lines/{id}/vendor-cost:
+    put:
+      summary: "PUT /api/enterprise/boq-lines/{id}/vendor-cost"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/boqs:
+    get:
+      summary: "GET /api/enterprise/boqs"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/enterprise/boqs"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/boqs/{id}:
+    get:
+      summary: "GET /api/enterprise/boqs/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/enterprise/boqs/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/boqs/{id}/lines:
+    post:
+      summary: "POST /api/enterprise/boqs/{id}/lines"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/boqs/{id}/negotiation/config:
+    get:
+      summary: "GET /api/enterprise/boqs/{id}/negotiation/config"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    put:
+      summary: "PUT /api/enterprise/boqs/{id}/negotiation/config"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/boqs/{id}/start-revision:
+    post:
+      summary: "POST /api/enterprise/boqs/{id}/start-revision"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/boqs/{id}/submit:
+    post:
+      summary: "POST /api/enterprise/boqs/{id}/submit"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewo-checklist-items/{id}:
+    patch:
+      summary: "PATCH /api/enterprise/ewo-checklist-items/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewo-checklist-templates:
+    get:
+      summary: "GET /api/enterprise/ewo-checklist-templates"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    put:
+      summary: "PUT /api/enterprise/ewo-checklist-templates"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewo-checklist-templates/{id}:
+    delete:
+      summary: "DELETE /api/enterprise/ewo-checklist-templates/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    get:
+      summary: "GET /api/enterprise/ewo-checklist-templates/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewos:
+    get:
+      summary: "GET /api/enterprise/ewos"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewos/from-quotation/{id}:
+    post:
+      summary: "POST /api/enterprise/ewos/from-quotation/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewos/{id}:
+    get:
+      summary: "GET /api/enterprise/ewos/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewos/{id}/assign:
+    post:
+      summary: "POST /api/enterprise/ewos/{id}/assign"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewos/{id}/cancel:
+    post:
+      summary: "POST /api/enterprise/ewos/{id}/cancel"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewos/{id}/checklist:
+    get:
+      summary: "GET /api/enterprise/ewos/{id}/checklist"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    put:
+      summary: "PUT /api/enterprise/ewos/{id}/checklist"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewos/{id}/checklist/from-template/{id}:
+    post:
+      summary: "POST /api/enterprise/ewos/{id}/checklist/from-template/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewos/{id}/complete:
+    post:
+      summary: "POST /api/enterprise/ewos/{id}/complete"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewos/{id}/link-field-wo:
+    post:
+      summary: "POST /api/enterprise/ewos/{id}/link-field-wo"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/ewos/{id}/start:
+    post:
+      summary: "POST /api/enterprise/ewos/{id}/start"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/internal-transactions:
+    get:
+      summary: "GET /api/enterprise/internal-transactions"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoice-payments/{id}/proofs:
+    get:
+      summary: "GET /api/enterprise/invoice-payments/{id}/proofs"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/enterprise/invoice-payments/{id}/proofs"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoice-plan-items/{id}/issue:
+    post:
+      summary: "POST /api/enterprise/invoice-plan-items/{id}/issue"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoice-plans/by-quotation/{id}:
+    get:
+      summary: "GET /api/enterprise/invoice-plans/by-quotation/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoice-plans/from-quotation/{id}:
+    post:
+      summary: "POST /api/enterprise/invoice-plans/from-quotation/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoice-plans/{id}:
+    get:
+      summary: "GET /api/enterprise/invoice-plans/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoice-plans/{id}/activate:
+    post:
+      summary: "POST /api/enterprise/invoice-plans/{id}/activate"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoice-plans/{id}/cancel:
+    post:
+      summary: "POST /api/enterprise/invoice-plans/{id}/cancel"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoice-plans/{id}/items:
+    put:
+      summary: "PUT /api/enterprise/invoice-plans/{id}/items"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoices:
+    get:
+      summary: "GET /api/enterprise/invoices"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoices/from-quotation/{id}:
+    post:
+      summary: "POST /api/enterprise/invoices/from-quotation/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoices/{id}:
+    get:
+      summary: "GET /api/enterprise/invoices/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoices/{id}/payments:
+    post:
+      summary: "POST /api/enterprise/invoices/{id}/payments"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/invoices/{id}/void:
+    post:
+      summary: "POST /api/enterprise/invoices/{id}/void"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/maintenance/auto-lost-sweep:
+    post:
+      summary: "POST /api/enterprise/maintenance/auto-lost-sweep"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/negotiation-round-approvals:
+    get:
+      summary: "GET /api/enterprise/negotiation-round-approvals"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/negotiation-round-approvals/{id}/approve:
+    post:
+      summary: "POST /api/enterprise/negotiation-round-approvals/{id}/approve"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/negotiation-round-approvals/{id}/reject:
+    post:
+      summary: "POST /api/enterprise/negotiation-round-approvals/{id}/reject"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/negotiation-rounds/{id}:
+    get:
+      summary: "GET /api/enterprise/negotiation-rounds/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/negotiations/by-boq/{id}:
+    get:
+      summary: "GET /api/enterprise/negotiations/by-boq/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/negotiations/by-boq/{id}/activate:
+    post:
+      summary: "POST /api/enterprise/negotiations/by-boq/{id}/activate"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/negotiations/{id}:
+    get:
+      summary: "GET /api/enterprise/negotiations/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/negotiations/{id}/abort:
+    post:
+      summary: "POST /api/enterprise/negotiations/{id}/abort"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/negotiations/{id}/rounds:
+    post:
+      summary: "POST /api/enterprise/negotiations/{id}/rounds"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/notification-prefs:
+    delete:
+      summary: "DELETE /api/enterprise/notification-prefs"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    get:
+      summary: "GET /api/enterprise/notification-prefs"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    put:
+      summary: "PUT /api/enterprise/notification-prefs"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/notifications:
+    get:
+      summary: "GET /api/enterprise/notifications"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/notifications/read-all:
+    post:
+      summary: "POST /api/enterprise/notifications/read-all"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/notifications/{id}/read:
+    post:
+      summary: "POST /api/enterprise/notifications/{id}/read"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/opportunities:
+    get:
+      summary: "GET /api/enterprise/opportunities"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/enterprise/opportunities"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/opportunities/{id}:
+    get:
+      summary: "GET /api/enterprise/opportunities/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/enterprise/opportunities/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/opportunities/{id}/advance:
+    post:
+      summary: "POST /api/enterprise/opportunities/{id}/advance"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/opportunities/{id}/lost:
+    post:
+      summary: "POST /api/enterprise/opportunities/{id}/lost"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/opportunities/{id}/po-documents:
+    get:
+      summary: "GET /api/enterprise/opportunities/{id}/po-documents"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/enterprise/opportunities/{id}/po-documents"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/opportunities/{id}/po-documents/bulk:
+    post:
+      summary: "POST /api/enterprise/opportunities/{id}/po-documents/bulk"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/opportunities/{id}/pre-boq:
+    put:
+      summary: "PUT /api/enterprise/opportunities/{id}/pre-boq"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/opportunities/{id}/pricebook:
+    post:
+      summary: "POST /api/enterprise/opportunities/{id}/pricebook"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/pricebook-lines/{id}:
+    delete:
+      summary: "DELETE /api/enterprise/pricebook-lines/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/enterprise/pricebook-lines/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/pricebooks:
+    get:
+      summary: "GET /api/enterprise/pricebooks"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/enterprise/pricebooks"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/pricebooks/{id}:
+    get:
+      summary: "GET /api/enterprise/pricebooks/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/enterprise/pricebooks/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/pricebooks/{id}/lines:
+    get:
+      summary: "GET /api/enterprise/pricebooks/{id}/lines"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/enterprise/pricebooks/{id}/lines"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/pricebooks/{id}/publish:
+    post:
+      summary: "POST /api/enterprise/pricebooks/{id}/publish"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/project-milestones/{id}:
+    patch:
+      summary: "PATCH /api/enterprise/project-milestones/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/project-sites/{id}/activate:
+    post:
+      summary: "POST /api/enterprise/project-sites/{id}/activate"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/project-sites/{id}/services:
+    get:
+      summary: "GET /api/enterprise/project-sites/{id}/services"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/enterprise/project-sites/{id}/services"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/projects:
+    get:
+      summary: "GET /api/enterprise/projects"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/projects/from-quotation/{id}:
+    post:
+      summary: "POST /api/enterprise/projects/from-quotation/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/projects/{id}:
+    get:
+      summary: "GET /api/enterprise/projects/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/projects/{id}/milestones/{id}/invoice:
+    post:
+      summary: "POST /api/enterprise/projects/{id}/milestones/{id}/invoice"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/projects/{id}/sites:
+    get:
+      summary: "GET /api/enterprise/projects/{id}/sites"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/enterprise/projects/{id}/sites"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/quotations:
+    get:
+      summary: "GET /api/enterprise/quotations"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/quotations/from-boq/{id}:
+    post:
+      summary: "POST /api/enterprise/quotations/from-boq/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/quotations/{id}:
+    get:
+      summary: "GET /api/enterprise/quotations/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/quotations/{id}/accept:
+    post:
+      summary: "POST /api/enterprise/quotations/{id}/accept"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/quotations/{id}/cancel:
+    post:
+      summary: "POST /api/enterprise/quotations/{id}/cancel"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/quotations/{id}/pdf:
+    get:
+      summary: "GET /api/enterprise/quotations/{id}/pdf"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/quotations/{id}/reject:
+    post:
+      summary: "POST /api/enterprise/quotations/{id}/reject"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/rfqs:
+    get:
+      summary: "GET /api/enterprise/rfqs"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/enterprise/rfqs"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/rfqs/{id}:
+    get:
+      summary: "GET /api/enterprise/rfqs/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/rfqs/{id}/assign:
+    post:
+      summary: "POST /api/enterprise/rfqs/{id}/assign"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/rfqs/{id}/cancel:
+    post:
+      summary: "POST /api/enterprise/rfqs/{id}/cancel"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/rfqs/{id}/fulfill:
+    post:
+      summary: "POST /api/enterprise/rfqs/{id}/fulfill"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/sla-templates:
+    get:
+      summary: "GET /api/enterprise/sla-templates"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/enterprise/sla-templates"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/sla-templates/{id}:
+    patch:
+      summary: "PATCH /api/enterprise/sla-templates/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/enterprise/vendors/{id}/metrics:
+    get:
+      summary: "GET /api/enterprise/vendors/{id}/metrics"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/basts/{id}/verify:
+    post:
+      summary: "POST /api/field/basts/{id}/verify"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/basts/{id}/verify-otp:
+    post:
+      summary: "POST /api/field/basts/{id}/verify-otp"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/cross-area/pending:
+    get:
+      summary: "GET /api/field/cross-area/pending"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/maintenance-events:
+    get:
+      summary: "GET /api/field/maintenance-events"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/field/maintenance-events"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/maintenance-events/{id}:
+    get:
+      summary: "GET /api/field/maintenance-events/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/maintenance-events/{id}/dispatch:
+    post:
+      summary: "POST /api/field/maintenance-events/{id}/dispatch"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/priority-insertions/{id}/respond:
+    post:
+      summary: "POST /api/field/priority-insertions/{id}/respond"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/speedtests/recent:
+    get:
+      summary: "GET /api/field/speedtests/recent"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/teams:
+    get:
+      summary: "GET /api/field/teams"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/field/teams"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/teams/{id}:
+    get:
+      summary: "GET /api/field/teams/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/teams/{id}/members:
+    get:
+      summary: "GET /api/field/teams/{id}/members"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/field/teams/{id}/members"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/tickets/{id}:
+    get:
+      summary: "GET /api/field/tickets/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/field/tickets/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/tickets/{id}/attachments:
+    get:
+      summary: "GET /api/field/tickets/{id}/attachments"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/work-orders:
+    get:
+      tags: [field]
+      summary: List work orders (paginated, filterable)
+      parameters:
+        - { name: status,    in: query, schema: { type: string } }
+        - { name: branch_id, in: query, schema: { type: string, format: uuid } }
+        - { name: team_id,   in: query, schema: { type: string, format: uuid } }
+        - { name: q,         in: query, schema: { type: string }, description: "Free-text search on wo_number / customer name / address" }
+        - { name: page,      in: query, schema: { type: integer, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: Work-order page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkOrderListResponse" }
+    post:
+      tags: [field]
+      summary: Create a work order (manual entry — most WOs are auto-created from orders / tickets)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [customer_id, wo_type, product_type, address]
+              properties:
+                customer_id:  { type: string, format: uuid }
+                wo_type:      { type: string }
+                product_type: { type: string, example: broadband }
+                address:      { type: string }
+                priority:     { type: string, enum: [low, medium, high, urgent] }
+                scheduled_date: { type: string, format: date-time }
+                notes:        { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkOrder" }
+
+  /api/field/work-orders/sla-breaches:
+    get:
+      tags: [field]
+      summary: Work orders past their SLA window
+      responses:
+        "200":
+          description: Breached WOs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/SLABreach" }
+
+  /api/field/work-orders/{id}:
+    get:
+      tags: [field]
+      summary: Work-order detail (with assignments, checklist, BAST)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: WO detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/WorkOrder"
+                  - type: object
+                    properties:
+                      assignments:
+                        type: array
+                        items: { $ref: "#/components/schemas/Assignment" }
+                      checklist_items:
+                        type: array
+                        items: { $ref: "#/components/schemas/ChecklistItem" }
+                      checklist_responses:
+                        type: array
+                        items: { $ref: "#/components/schemas/ChecklistResponse" }
+                      active_bast: { $ref: "#/components/schemas/BAST" }
+                      checklist_min_photos: { type: integer }
+        "404": { description: WO not found }
+
+  /api/field/work-orders/{id}/assign:
+    post:
+      tags: [field]
+      summary: Assign a team (creates assignments per technician)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssignWORequest" }
+      responses:
+        "200": { description: Assigned }
+        "409": { description: WO already assigned or in a non-assignable status }
+
+  /api/field/work-orders/{id}/bast:
+    post:
+      tags: [field]
+      summary: Submit BAST sign-off (on-site signature OR OTP-remote)
+      description: |
+        Customer-facing handoff. `sign_off_mode=on_site` requires a
+        pre-uploaded signature image (object URL); `otp_remote` requires
+        the OTP code sent to the customer's registered phone.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BASTSubmission" }
+      responses:
+        "201":
+          description: BAST created (status=pending_noc_verify)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BAST" }
+        "400": { description: Missing signature URL (on_site) or OTP (otp_remote) }
+
+  /api/field/work-orders/{id}/checklist:
+    post:
+      tags: [field]
+      summary: Submit checklist responses (idempotent — re-submitting overwrites)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChecklistSubmission" }
+      responses:
+        "200":
+          description: Items recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ChecklistResponse" }
+  /api/field/work-orders/{id}/priority-insert:
+    post:
+      summary: "POST /api/field/work-orders/{id}/priority-insert"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/field/work-orders/{id}/reschedule:
+    post:
+      tags: [field]
+      summary: Request a reschedule (logged + applied to the WO)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RescheduleRequest" }
+      responses:
+        "201":
+          description: Reschedule recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Reschedule" }
+
+  /api/field/work-orders/{id}/reschedules:
+    get:
+      tags: [field]
+      summary: Reschedule history for a WO (newest first)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: History
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Reschedule" }
+
+  /api/field/work-orders/{id}/resolution:
+    post:
+      tags: [field]
+      summary: Add a free-form resolution item to the WO log
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [description]
+              properties:
+                description: { type: string }
+                parts_used:  { type: string }
+                cost:        { type: number, format: float }
+      responses:
+        "201": { description: Added }
+
+  /api/field/work-orders/{id}/route:
+    post:
+      tags: [field]
+      summary: Auto-route the WO to the best team (heuristic — branch + load)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Routed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  team_id:    { type: string, format: uuid }
+                  team_name:  { type: string }
+                  reason:     { type: string }
+
+  /api/field/work-orders/{id}/speedtest:
+    get:
+      tags: [field]
+      summary: Parsed speedtest from the WO's checklist (latest reading)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Parsed speedtest
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  wo_id: { type: string, format: uuid }
+                  found: { type: boolean }
+                  speedtest:
+                    type: object
+                    properties:
+                      wo_id:         { type: string, format: uuid }
+                      wo_number:     { type: string }
+                      down_mbps:     { type: number, format: float }
+                      up_mbps:       { type: number, format: float }
+                      ping_ms:       { type: number, format: float }
+                      raw:           { type: string }
+                      captured_at:   { type: string, format: date-time }
+                      tech_user_id:  { type: string, format: uuid }
+                      tech_full_name: { type: string }
+
+  /api/field/work-orders/{id}/status:
+    post:
+      tags: [field]
+      summary: Flip the WO status (in_progress, completed, etc.)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StatusWORequest" }
+      responses:
+        "200":
+          description: Status flipped
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkOrder" }
+        "409": { description: Illegal status transition }
+  /api/identity/audit-logs:
+    get:
+      summary: "GET /api/identity/audit-logs"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/auth/logout:
+    post:
+      summary: "POST /api/identity/auth/logout"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/auth/me:
+    get:
+      summary: "GET /api/identity/auth/me"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/auth/refresh:
+    post:
+      summary: "POST /api/identity/auth/refresh"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/availability/roster:
+    get:
+      summary: "GET /api/identity/availability/roster"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/availability/{id}:
+    put:
+      summary: "PUT /api/identity/availability/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/branches:
+    get:
+      summary: "GET /api/identity/branches"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/identity/branches"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/branches/{id}:
+    patch:
+      summary: "PATCH /api/identity/branches/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/dashboard/stats:
+    get:
+      summary: "GET /api/identity/dashboard/stats"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/permissions:
+    get:
+      summary: "GET /api/identity/permissions"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/platform-config:
+    get:
+      summary: "GET /api/identity/platform-config"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/platform-config/{id}:
+    put:
+      summary: "PUT /api/identity/platform-config/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/roles:
+    get:
+      summary: "GET /api/identity/roles"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/identity/roles"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/roles/{id}:
+    delete:
+      summary: "DELETE /api/identity/roles/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    get:
+      summary: "GET /api/identity/roles/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/identity/roles/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/roles/{id}/permissions:
+    get:
+      summary: "GET /api/identity/roles/{id}/permissions"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    put:
+      summary: "PUT /api/identity/roles/{id}/permissions"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/users:
+    get:
+      summary: "GET /api/identity/users"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/identity/users"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/users/{id}:
+    get:
+      summary: "GET /api/identity/users/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/identity/users/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/users/{id}/activate:
+    post:
+      summary: "POST /api/identity/users/{id}/activate"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/users/{id}/deactivate:
+    post:
+      summary: "POST /api/identity/users/{id}/deactivate"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/users/{id}/detail:
+    get:
+      summary: "GET /api/identity/users/{id}/detail"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/identity/users/{id}/roles:
+    put:
+      summary: "PUT /api/identity/users/{id}/roles"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/coverage/check:
+    post:
+      summary: "POST /api/network/coverage/check"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/coverage/import-kmz/apply:
+    post:
+      summary: "POST /api/network/coverage/import-kmz/apply"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/coverage/import-kmz/preview:
+    post:
+      summary: "POST /api/network/coverage/import-kmz/preview"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/node-types:
+    get:
+      summary: "GET /api/network/node-types"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/network/node-types"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/node-types/{id}:
+    patch:
+      summary: "PATCH /api/network/node-types/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/nodes:
+    get:
+      summary: "GET /api/network/nodes"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/network/nodes"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/nodes/{id}:
+    get:
+      summary: "GET /api/network/nodes/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/network/nodes/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/nodes/{id}/impact:
+    get:
+      summary: "GET /api/network/nodes/{id}/impact"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/nodes/{id}/polygon:
+    delete:
+      summary: "DELETE /api/network/nodes/{id}/polygon"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    get:
+      summary: "GET /api/network/nodes/{id}/polygon"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    put:
+      summary: "PUT /api/network/nodes/{id}/polygon"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/nodes/{id}/ports:
+    get:
+      summary: "GET /api/network/nodes/{id}/ports"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/ports/{id}/activate:
+    post:
+      summary: "POST /api/network/ports/{id}/activate"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/ports/{id}/release:
+    post:
+      summary: "POST /api/network/ports/{id}/release"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/network/ports/{id}/reserve:
+    post:
+      summary: "POST /api/network/ports/{id}/reserve"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/platform/customer-schemas/{id}:
+    get:
+      summary: "GET /api/platform/customer-schemas/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/platform/customer-schemas/{id}/{id}:
+    delete:
+      summary: "DELETE /api/platform/customer-schemas/{id}/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    put:
+      summary: "PUT /api/platform/customer-schemas/{id}/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/platform/schemas:
+    get:
+      summary: "GET /api/platform/schemas"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/platform/schemas"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/platform/schemas/{id}:
+    get:
+      summary: "GET /api/platform/schemas/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/platform/schemas/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/platform/schemas/{id}/publish:
+    post:
+      summary: "POST /api/platform/schemas/{id}/publish"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/platform/schemas/{id}/supersede:
+    post:
+      summary: "POST /api/platform/schemas/{id}/supersede"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/uploads/photos:
+    post:
+      summary: "POST /api/uploads/photos"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/uploads/photos/*:
+    get:
+      summary: "GET /api/uploads/photos/*"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/alerts:
+    get:
+      summary: "GET /api/warehouse/alerts"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/assets:
+    get:
+      summary: "GET /api/warehouse/assets"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/assets/{id}:
+    get:
+      summary: "GET /api/warehouse/assets/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/catalog/items:
+    get:
+      summary: "GET /api/warehouse/catalog/items"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/warehouse/catalog/items"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/catalog/items/{id}:
+    get:
+      summary: "GET /api/warehouse/catalog/items/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/warehouse/catalog/items/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/dispatch:
+    get:
+      summary: "GET /api/warehouse/dispatch"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/warehouse/dispatch"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/dispatch-items/{id}/return:
+    post:
+      summary: "POST /api/warehouse/dispatch-items/{id}/return"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/dispatch-items/{id}/scan:
+    post:
+      summary: "POST /api/warehouse/dispatch-items/{id}/scan"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/dispatch/{id}:
+    get:
+      summary: "GET /api/warehouse/dispatch/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/dispatch/{id}/cancel:
+    post:
+      summary: "POST /api/warehouse/dispatch/{id}/cancel"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/dispatch/{id}/mark-picked-up:
+    post:
+      summary: "POST /api/warehouse/dispatch/{id}/mark-picked-up"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/dispatch/{id}/stage:
+    post:
+      summary: "POST /api/warehouse/dispatch/{id}/stage"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/opname/sessions:
+    get:
+      summary: "GET /api/warehouse/opname/sessions"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/warehouse/opname/sessions"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/opname/sessions/{id}:
+    get:
+      summary: "GET /api/warehouse/opname/sessions/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/opname/sessions/{id}/cancel:
+    post:
+      summary: "POST /api/warehouse/opname/sessions/{id}/cancel"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/opname/sessions/{id}/commit:
+    post:
+      summary: "POST /api/warehouse/opname/sessions/{id}/commit"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/opname/sessions/{id}/counts:
+    put:
+      summary: "PUT /api/warehouse/opname/sessions/{id}/counts"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/suppliers:
+    get:
+      summary: "GET /api/warehouse/suppliers"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/warehouse/suppliers"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/suppliers/{id}:
+    get:
+      summary: "GET /api/warehouse/suppliers/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/warehouse/suppliers/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/transfers:
+    get:
+      summary: "GET /api/warehouse/transfers"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/warehouse/transfers"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/transfers/{id}:
+    get:
+      summary: "GET /api/warehouse/transfers/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/transfers/{id}/cancel:
+    post:
+      summary: "POST /api/warehouse/transfers/{id}/cancel"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/transfers/{id}/dispatch:
+    post:
+      summary: "POST /api/warehouse/transfers/{id}/dispatch"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/transfers/{id}/receive:
+    post:
+      summary: "POST /api/warehouse/transfers/{id}/receive"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/warehouses:
+    get:
+      summary: "GET /api/warehouse/warehouses"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    post:
+      summary: "POST /api/warehouse/warehouses"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/warehouses/{id}:
+    get:
+      summary: "GET /api/warehouse/warehouses/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+    patch:
+      summary: "PATCH /api/warehouse/warehouses/{id}"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/warehouses/{id}/intake:
+    post:
+      summary: "POST /api/warehouse/warehouses/{id}/intake"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/warehouses/{id}/inventory:
+    get:
+      summary: "GET /api/warehouse/warehouses/{id}/inventory"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/warehouses/{id}/items/{id}/threshold:
+    put:
+      summary: "PUT /api/warehouse/warehouses/{id}/items/{id}/threshold"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /api/warehouse/warehouses/{id}/movements:
+    get:
+      summary: "GET /api/warehouse/warehouses/{id}/movements"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /portal/addons:
+    get:
+      summary: "GET /portal/addons"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /portal/addons-catalog:
+    get:
+      summary: "GET /portal/addons-catalog"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /portal/addons/buy:
+    post:
+      summary: "POST /portal/addons/buy"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /portal/auth/refresh:
+    post:
+      summary: "POST /portal/auth/refresh"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /portal/logout:
+    post:
+      summary: "POST /portal/logout"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /portal/plan-change:
+    post:
+      summary: "POST /portal/plan-change"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /portal/products:
+    get:
+      summary: "GET /portal/products"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /portal/relocation:
+    post:
+      summary: "POST /portal/relocation"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /portal/termination:
+    post:
+      summary: "POST /portal/termination"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /portal/termination/confirm:
+    post:
+      summary: "POST /portal/termination/confirm"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+  /portal/termination/request:
+    post:
+      summary: "POST /portal/termination/request"
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+        "401": { description: Unauthorized }
+
+  # Cross-service health probe. Auto-mounted by pkg/httpserver on every
+  # service; exposed via the api-gateway. No auth — used by monitoring
+  # + the CI boot-smoke job.
+  /healthz:
+    get:
+      summary: "Service readiness probe"
+      security: []
+      responses:
+        "200": { description: Healthy }
+        "503": { description: Service or its DB is unhealthy }

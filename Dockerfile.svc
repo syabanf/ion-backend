@@ -1,0 +1,43 @@
+# Shared Dockerfile for the Go services that don't need extra runtime
+# binaries. crm-svc has its own Dockerfile because it bundles Tesseract.
+#
+# Usage:
+#   docker build -f backend/Dockerfile.svc --build-arg SVC=identity-svc \
+#     -t ion/identity-svc:latest .
+#
+# SVC must match a directory under backend/cmd/. The binary is built
+# statically (CGO_ENABLED=0) so the slim runtime image doesn't need
+# glibc. Anything that *does* need cgo or a runtime dep gets its own
+# Dockerfile next to its cmd/ entry.
+
+FROM golang:1.21-bookworm AS build
+ARG SVC
+WORKDIR /src
+
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+
+COPY backend/ ./
+
+ENV CGO_ENABLED=0
+RUN test -n "$SVC" && test -d "./cmd/$SVC" || \
+    (echo "build-arg SVC must be set to a valid cmd/* name" >&2; exit 1)
+RUN go build -ldflags='-s -w' -o /out/svc ./cmd/${SVC}
+
+FROM debian:bookworm-slim AS runtime
+ARG SVC
+# ca-certificates for any outbound TLS (DJP, Xendit, WhatsApp, etc.).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system ion && useradd --system --gid ion --shell /sbin/nologin ion
+USER ion
+
+COPY --from=build /out/svc /usr/local/bin/svc
+
+# Each service reads its port from <SVC>_PORT (or the equivalent name
+# the binary uses); don't hardcode an EXPOSE because the variable is
+# resolved at runtime, not at image build. Compose wires the mapping.
+
+ENTRYPOINT ["/usr/local/bin/svc"]

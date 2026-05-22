@@ -1,0 +1,50 @@
+# Go build outputs — these run into hundreds of MB and are
+# reproducible from source. Anything in /bin or top-level go-built
+# binaries should never be committed.
+bin/
+*.exe
+*.test
+*.out
+
+# Top-level binaries from `go build` (without -o). These names overlap
+# with cmd/ subdirectories which DO want to be tracked, so we list each
+# binary explicitly rather than using a wildcard.
+/admin-svc
+/api-gateway
+/crm-svc
+/field-svc
+/enterprise-svc
+/billing-svc
+/identity-svc
+/network-svc
+/warehouse-svc
+/seed
+/seed-demo
+/seed-referrals
+/seed-checklists
+
+# Build / coverage artifacts
+coverage.out
+coverage.html
+*.prof
+*.pprof
+
+# Local env + secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Test scratch
+/tmp/
+psql-errors.log
+mig.log
