@@ -5,7 +5,6 @@ package http
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -110,11 +109,11 @@ func (h *Handler) Mount(r chi.Router) {
 
 func (h *Handler) listPricebooks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	page := parseIntDefault(q.Get("page"), 1)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	if page < 1 {
 		page = 1
 	}
-	pageSize := parseIntDefault(q.Get("page_size"), 50)
+	pageSize := httpserver.ParseIntDefault(q.Get("page_size"), 50)
 	f := port.PricebookListFilter{
 		Status:           q.Get("status"),
 		HoldingCompanyID: q.Get("holding_company_id"),
@@ -348,11 +347,11 @@ func (h *Handler) deletePricebookLine(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listOpportunities(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	page := parseIntDefault(q.Get("page"), 1)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	if page < 1 {
 		page = 1
 	}
-	pageSize := parseIntDefault(q.Get("page_size"), 50)
+	pageSize := httpserver.ParseIntDefault(q.Get("page_size"), 50)
 	f := port.OpportunityListFilter{
 		Stage:               q.Get("stage"),
 		Search:              q.Get("q"),
@@ -660,13 +659,3 @@ func parseUUID(s, field string) (uuid.UUID, error) {
 	return id, nil
 }
 
-func parseIntDefault(s string, def int) int {
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return def
-	}
-	return n
-}

@@ -3,7 +3,6 @@ package http
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -150,9 +149,9 @@ func (h *Handler) listNodes(w http.ResponseWriter, r *http.Request) {
 	f := port.NodeListFilter{
 		Search: q.Get("q"),
 		Status: q.Get("status"),
-		Limit:  parseIntDefault(q.Get("page_size"), 25),
+		Limit:  httpserver.ParseIntDefault(q.Get("page_size"), 25),
 	}
-	page := parseIntDefault(q.Get("page"), 1)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	if page < 1 {
 		page = 1
 	}
@@ -405,13 +404,3 @@ func (h *Handler) releasePort(w http.ResponseWriter, r *http.Request) {
 }
 
 // helpers
-func parseIntDefault(s string, def int) int {
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n <= 0 {
-		return def
-	}
-	return n
-}

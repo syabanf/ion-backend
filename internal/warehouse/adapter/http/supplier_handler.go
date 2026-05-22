@@ -94,8 +94,8 @@ type updateSupplierRequest struct {
 
 func (h *Handler) listSuppliers(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit := parseIntDefault(q.Get("page_size"), 50)
-	page := parseIntDefault(q.Get("page"), 1)
+	limit := httpserver.ParseIntDefault(q.Get("page_size"), 50)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	if page < 1 {
 		page = 1
 	}

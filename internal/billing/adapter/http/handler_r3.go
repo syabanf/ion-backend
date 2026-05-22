@@ -72,7 +72,7 @@ func (h *Handler) listTerminations(w http.ResponseWriter, r *http.Request) {
 	f := port.TerminationRequestFilter{
 		Kind:   q.Get("kind"),
 		Status: q.Get("status"),
-		Limit:  parseIntDefault(q.Get("page_size"), 50),
+		Limit:  httpserver.ParseIntDefault(q.Get("page_size"), 50),
 	}
 	if v := q.Get("customer_id"); v != "" {
 		id, err := uuid.Parse(v)
@@ -124,7 +124,7 @@ func (h *Handler) listReferralRewards(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := port.ReferralRewardFilter{
 		Status: q.Get("status"),
-		Limit:  parseIntDefault(q.Get("page_size"), 100),
+		Limit:  httpserver.ParseIntDefault(q.Get("page_size"), 100),
 	}
 	if v := q.Get("referrer_customer_id"); v != "" {
 		id, err := uuid.Parse(v)

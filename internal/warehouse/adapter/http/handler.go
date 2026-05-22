@@ -4,7 +4,6 @@ package http
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -266,9 +265,9 @@ func (h *Handler) listItems(w http.ResponseWriter, r *http.Request) {
 	f := port.StockItemListFilter{
 		Search:   q.Get("q"),
 		Category: q.Get("category"),
-		Limit:    parseIntDefault(q.Get("page_size"), 50),
+		Limit:    httpserver.ParseIntDefault(q.Get("page_size"), 50),
 	}
-	page := parseIntDefault(q.Get("page"), 1)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	f.Offset = (page - 1) * f.Limit
 
 	if v := q.Get("active"); v != "" {
@@ -460,8 +459,8 @@ func (h *Handler) movements(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	limit := parseIntDefault(q.Get("page_size"), 50)
-	page := parseIntDefault(q.Get("page"), 1)
+	limit := httpserver.ParseIntDefault(q.Get("page_size"), 50)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	offset := (page - 1) * limit
 
 	rows, total, err := h.uc.ListMovements(r.Context(), id, limit, offset)
@@ -488,9 +487,9 @@ func (h *Handler) listAssets(w http.ResponseWriter, r *http.Request) {
 		Status:  q.Get("status"),
 		Search:  q.Get("q"),
 		OrderBy: q.Get("order_by"),
-		Limit:   parseIntDefault(q.Get("page_size"), 50),
+		Limit:   httpserver.ParseIntDefault(q.Get("page_size"), 50),
 	}
-	page := parseIntDefault(q.Get("page"), 1)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	f.Offset = (page - 1) * f.Limit
 	if v := q.Get("warehouse_id"); v != "" {
 		if id, err := uuid.Parse(v); err == nil {
@@ -536,8 +535,8 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listTransfers(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit := parseIntDefault(q.Get("page_size"), 50)
-	page := parseIntDefault(q.Get("page"), 1)
+	limit := httpserver.ParseIntDefault(q.Get("page_size"), 50)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	out, total, err := h.uc.ListTransfers(r.Context(), q.Get("status"), limit, (page-1)*limit)
 	if err != nil {
 		httpserver.WriteError(w, err)
@@ -663,13 +662,3 @@ func (h *Handler) transferTransition(
 // helpers
 // =====================================================================
 
-func parseIntDefault(s string, def int) int {
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n <= 0 {
-		return def
-	}
-	return n
-}

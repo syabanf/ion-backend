@@ -61,7 +61,7 @@ func (h *Handler) listCycles(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := port.CycleFilter{
 		Status: q.Get("status"),
-		Limit:  parseIntDefault(q.Get("page_size"), 50),
+		Limit:  httpserver.ParseIntDefault(q.Get("page_size"), 50),
 	}
 	if v := q.Get("customer_id"); v != "" {
 		id, err := uuid.Parse(v)
@@ -116,7 +116,7 @@ func (h *Handler) listCommissions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := port.CommissionFilter{
 		PartyType: q.Get("party_type"),
-		Limit:     parseIntDefault(q.Get("page_size"), 100),
+		Limit:     httpserver.ParseIntDefault(q.Get("page_size"), 100),
 	}
 	if v := q.Get("user_id"); v != "" {
 		id, err := uuid.Parse(v)

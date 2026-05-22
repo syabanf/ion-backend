@@ -3,7 +3,6 @@ package http
 
 import (
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -90,8 +89,8 @@ func (h *Handler) Mount(r chi.Router) {
 
 func (h *Handler) listWOs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit := parseIntDefault(q.Get("page_size"), 50)
-	page := parseIntDefault(q.Get("page"), 1)
+	limit := httpserver.ParseIntDefault(q.Get("page_size"), 50)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	f := port.WOListFilter{
 		Status: q.Get("status"),
 		Search: q.Get("q"),
@@ -565,13 +564,3 @@ func (h *Handler) addTeamMember(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, http.StatusCreated, toTeamMemberDTO(*v))
 }
 
-func parseIntDefault(s string, def int) int {
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n <= 0 {
-		return def
-	}
-	return n
-}

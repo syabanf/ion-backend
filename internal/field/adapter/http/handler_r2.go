@@ -115,8 +115,8 @@ func (h *Handler) verifyBASTOTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listSLABreaches(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit := parseIntDefault(q.Get("page_size"), 50)
-	page := parseIntDefault(q.Get("page"), 1)
+	limit := httpserver.ParseIntDefault(q.Get("page_size"), 50)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	out, total, err := h.uc.ListSLABreaches(r.Context(), limit, (page-1)*limit)
 	if err != nil {
 		httpserver.WriteError(w, err)

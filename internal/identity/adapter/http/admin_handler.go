@@ -2,7 +2,6 @@ package http
 
 import (
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -92,9 +91,9 @@ func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {
 	f := port.UserListFilter{
 		Search: q.Get("q"),
 		Role:   q.Get("role"),
-		Limit:  parseIntDefault(q.Get("page_size"), 25),
+		Limit:  httpserver.ParseIntDefault(q.Get("page_size"), 25),
 	}
-	page := parseIntDefault(q.Get("page"), 1)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	if page < 1 {
 		page = 1
 	}
@@ -276,9 +275,9 @@ func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) {
 	f := domain.AuditFilter{
 		Module:     q.Get("module"),
 		RecordType: q.Get("record_type"),
-		Limit:      parseIntDefault(q.Get("page_size"), 25),
+		Limit:      httpserver.ParseIntDefault(q.Get("page_size"), 25),
 	}
-	page := parseIntDefault(q.Get("page"), 1)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	if page < 1 {
 		page = 1
 	}
@@ -368,13 +367,3 @@ func (h *Handler) updatePlatformConfig(w http.ResponseWriter, r *http.Request) {
 // helpers
 // =====================================================================
 
-func parseIntDefault(s string, def int) int {
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n <= 0 {
-		return def
-	}
-	return n
-}

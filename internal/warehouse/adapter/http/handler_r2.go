@@ -94,8 +94,8 @@ func (h *Handler) listOpnameSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		whID = &id
 	}
-	limit := parseIntDefault(q.Get("page_size"), 50)
-	page := parseIntDefault(q.Get("page"), 1)
+	limit := httpserver.ParseIntDefault(q.Get("page_size"), 50)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	out, total, err := h.uc.ListOpnameSessions(r.Context(), whID, q.Get("status"), limit, (page-1)*limit)
 	if err != nil {
 		httpserver.WriteError(w, err)

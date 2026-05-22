@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -205,8 +204,8 @@ func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listLeads(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit := parseIntDefault(q.Get("page_size"), 50)
-	page := parseIntDefault(q.Get("page"), 1)
+	limit := httpserver.ParseIntDefault(q.Get("page_size"), 50)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	f := port.LeadListFilter{
 		Status: q.Get("status"),
 		Search: q.Get("q"),
@@ -474,8 +473,8 @@ func (h *Handler) updateDocument(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listCustomers(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit := parseIntDefault(q.Get("page_size"), 50)
-	page := parseIntDefault(q.Get("page"), 1)
+	limit := httpserver.ParseIntDefault(q.Get("page_size"), 50)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	out, total, err := h.uc.ListCustomers(r.Context(), q.Get("status"), limit, (page-1)*limit)
 	if err != nil {
 		httpserver.WriteError(w, err)
@@ -506,8 +505,8 @@ func (h *Handler) getCustomer(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listOrders(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit := parseIntDefault(q.Get("page_size"), 50)
-	page := parseIntDefault(q.Get("page"), 1)
+	limit := httpserver.ParseIntDefault(q.Get("page_size"), 50)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 
 	var (
 		out   []domain.Order
@@ -557,13 +556,3 @@ func (h *Handler) getOrder(w http.ResponseWriter, r *http.Request) {
 // helpers
 // =====================================================================
 
-func parseIntDefault(s string, def int) int {
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n <= 0 {
-		return def
-	}
-	return n
-}

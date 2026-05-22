@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -87,11 +86,11 @@ func (h *Handler) Mount(r chi.Router) {
 
 func (h *Handler) listSchemas(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	page := parseIntDefault(q.Get("page"), 1)
+	page := httpserver.ParseIntDefault(q.Get("page"), 1)
 	if page < 1 {
 		page = 1
 	}
-	pageSize := parseIntDefault(q.Get("page_size"), 100)
+	pageSize := httpserver.ParseIntDefault(q.Get("page_size"), 100)
 	f := port.SchemaListFilter{
 		Status: q.Get("status"),
 		Code:   q.Get("code"),
@@ -394,17 +393,6 @@ func parseUUID(s, field string) (uuid.UUID, error) {
 		)
 	}
 	return id, nil
-}
-
-func parseIntDefault(s string, def int) int {
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return def
-	}
-	return n
 }
 
 // actorUserID pulls the authenticated user's UUID from the request
