@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -83,6 +85,128 @@ func (r *BranchRepository) Update(ctx context.Context, b *domain.Branch) error {
 		return derrors.NotFound("branch.not_found", "branch not found")
 	}
 	return nil
+}
+
+// ApplyBranchPatch performs the Wave 68 sparse PATCH covering the
+// geo + per-branch operational config columns. We build the UPDATE
+// dynamically: only the columns whose input pointer is non-nil OR
+// whose corresponding *Clear pointer is true get written.
+//
+// geo_shape lives as a PostGIS geometry(MultiPolygon, 4326); the
+// caller passes raw GeoJSON which we cast with
+// ST_Multi(ST_GeomFromGeoJSON(...)) so a Polygon is promoted to
+// MultiPolygon on the fly.
+func (r *BranchRepository) ApplyBranchPatch(ctx context.Context, in port.UpdateBranchInput) error {
+	sets := make([]string, 0, 12)
+	args := []any{in.ID}
+	idx := 2
+
+	appendNullable := func(col string, val any, clear *bool, valSet bool) {
+		if clear != nil && *clear {
+			sets = append(sets, col+" = NULL")
+			return
+		}
+		if !valSet {
+			return
+		}
+		sets = append(sets, col+" = $"+strconv.Itoa(idx))
+		args = append(args, val)
+		idx++
+	}
+
+	if in.GeoShapeClear != nil && *in.GeoShapeClear {
+		sets = append(sets, "geo_shape = NULL")
+	} else if in.GeoShapeGeoJSON != nil && *in.GeoShapeGeoJSON != "" {
+		sets = append(sets,
+			"geo_shape = ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON($"+
+				strconv.Itoa(idx)+"), 4326))")
+		args = append(args, *in.GeoShapeGeoJSON)
+		idx++
+	}
+
+	if in.ODPStrategy != nil {
+		appendNullable("odp_strategy", *in.ODPStrategy, in.ODPStrategyClear, true)
+	} else if in.ODPStrategyClear != nil && *in.ODPStrategyClear {
+		appendNullable("odp_strategy", nil, in.ODPStrategyClear, false)
+	}
+	if in.CableDistance != nil {
+		appendNullable("cable_distance", *in.CableDistance, in.CableDistanceClear, true)
+	} else if in.CableDistanceClear != nil && *in.CableDistanceClear {
+		appendNullable("cable_distance", nil, in.CableDistanceClear, false)
+	}
+	if in.WOAutoAssign != nil {
+		appendNullable("wo_auto_assign", *in.WOAutoAssign, in.WOAutoAssignClear, true)
+	} else if in.WOAutoAssignClear != nil && *in.WOAutoAssignClear {
+		appendNullable("wo_auto_assign", nil, in.WOAutoAssignClear, false)
+	}
+
+	if in.SLAAssignmentMinutes != nil {
+		appendNullable("sla_assignment_minutes", *in.SLAAssignmentMinutes,
+			in.SLAAssignmentMinutesClear, true)
+	} else if in.SLAAssignmentMinutesClear != nil && *in.SLAAssignmentMinutesClear {
+		appendNullable("sla_assignment_minutes", nil,
+			in.SLAAssignmentMinutesClear, false)
+	}
+	if in.SLADispatchMinutes != nil {
+		appendNullable("sla_dispatch_minutes", *in.SLADispatchMinutes,
+			in.SLADispatchMinutesClear, true)
+	} else if in.SLADispatchMinutesClear != nil && *in.SLADispatchMinutesClear {
+		appendNullable("sla_dispatch_minutes", nil,
+			in.SLADispatchMinutesClear, false)
+	}
+	if in.SLAInstallMinutes != nil {
+		appendNullable("sla_install_minutes", *in.SLAInstallMinutes,
+			in.SLAInstallMinutesClear, true)
+	} else if in.SLAInstallMinutesClear != nil && *in.SLAInstallMinutesClear {
+		appendNullable("sla_install_minutes", nil,
+			in.SLAInstallMinutesClear, false)
+	}
+
+	if len(sets) == 0 {
+		return nil // No patch fields set; cheap no-op.
+	}
+	sets = append(sets, "updated_at = NOW()")
+	q := "UPDATE identity.branches SET " + strings.Join(sets, ", ") +
+		" WHERE id = $1"
+	tag, err := r.pool.Exec(ctx, q, args...)
+	if err != nil {
+		return derrors.Wrap(derrors.KindInternal, "db.branch_patch",
+			"apply branch patch", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return derrors.NotFound("branch.not_found", "branch not found")
+	}
+	return nil
+}
+
+func (r *BranchRepository) FindConfig(ctx context.Context, id uuid.UUID) (*port.BranchConfigView, error) {
+	var v port.BranchConfigView
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+		  CASE WHEN geo_shape IS NULL THEN NULL
+		       ELSE ST_AsGeoJSON(geo_shape)::text END,
+		  CASE WHEN odp_strategy IS NULL THEN NULL
+		       ELSE odp_strategy::text END,
+		  CASE WHEN cable_distance IS NULL THEN NULL
+		       ELSE cable_distance::text END,
+		  CASE WHEN wo_auto_assign IS NULL THEN NULL
+		       ELSE wo_auto_assign::text END,
+		  sla_assignment_minutes,
+		  sla_dispatch_minutes,
+		  sla_install_minutes
+		FROM identity.branches
+		WHERE id = $1
+	`, id).Scan(&v.GeoShapeGeoJSON, &v.ODPStrategy, &v.CableDistance,
+		&v.WOAutoAssign, &v.SLAAssignmentMinutes, &v.SLADispatchMinutes,
+		&v.SLAInstallMinutes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, derrors.NotFound("branch.not_found", "branch not found")
+	}
+	if err != nil {
+		return nil, derrors.Wrap(derrors.KindInternal, "db.branch_config_read",
+			"read branch config", err)
+	}
+	return &v, nil
 }
 
 func (r *BranchRepository) CountByLevel(ctx context.Context) (map[string]int, error) {

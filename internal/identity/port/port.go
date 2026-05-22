@@ -163,10 +163,42 @@ type CreateBranchInput struct {
 }
 
 // UpdateBranchInput patches editable branch fields.
+//
+// Wave 68 — extended to cover the geo + per-branch operational config
+// fields that previously could only be edited via direct SQL. The
+// repo applies a sparse UPDATE — any pointer left nil means "don't
+// touch". Clearing a field uses the *Clear booleans.
 type UpdateBranchInput struct {
 	ID     uuid.UUID
 	Name   *string
 	Active *bool
+
+	// GeoShapeGeoJSON is the GeoJSON MultiPolygon (or Polygon —
+	// auto-promoted by ST_Multi) that defines the branch's coverage
+	// area. Set to "" + GeoShapeClear=true to remove the polygon.
+	GeoShapeGeoJSON *string
+	GeoShapeClear   *bool
+
+	// ODPStrategy / CableDistance / WOAutoAssign — free-shape JSON
+	// blobs that the branch repo persists into the matching jsonb
+	// columns. The application layer reads them via type-tagged DTOs
+	// in CRM + field flows.
+	ODPStrategy     *string // raw JSON; "" + clear=true removes
+	ODPStrategyClear *bool
+	CableDistance     *string
+	CableDistanceClear *bool
+	WOAutoAssign     *string
+	WOAutoAssignClear *bool
+
+	// Per-branch SLA columns (PRD §9). Stored in minutes; nil leaves
+	// the column unchanged. Use the *Clear booleans to NULL the column
+	// (and let the inheritance chain resolve up the parent path).
+	SLAAssignmentMinutes      *int
+	SLAAssignmentMinutesClear *bool
+	SLADispatchMinutes        *int
+	SLADispatchMinutesClear   *bool
+	SLAInstallMinutes         *int
+	SLAInstallMinutesClear    *bool
 }
 
 // DashboardStats is the payload of /api/identity/dashboard/stats.
@@ -212,6 +244,8 @@ type UseCase interface {
 	ListBranches(ctx context.Context) ([]domain.Branch, error)
 	CreateBranch(ctx context.Context, in CreateBranchInput) (*domain.Branch, error)
 	UpdateBranch(ctx context.Context, in UpdateBranchInput) (*domain.Branch, error)
+	// Wave 68 — config read for the branch editor.
+	GetBranchConfig(ctx context.Context, id uuid.UUID) (*BranchConfigView, error)
 
 	// Audit
 	ListAuditEntries(ctx context.Context, f domain.AuditFilter) ([]domain.AuditEntry, int, error)
@@ -285,12 +319,33 @@ type UserRepository interface {
 	CountActive(ctx context.Context) (int, int, error) // (active, total)
 }
 
+// BranchConfigView projects the geo + per-branch operational
+// config off identity.branches into one read shape. The repo
+// returns the GeoJSON as a string (already wrapped via
+// ST_AsGeoJSON); the JSONB columns come back as strings too so
+// the handler can pass them straight through.
+type BranchConfigView struct {
+	GeoShapeGeoJSON      *string
+	ODPStrategy          *string
+	CableDistance        *string
+	WOAutoAssign         *string
+	SLAAssignmentMinutes *int
+	SLADispatchMinutes   *int
+	SLAInstallMinutes    *int
+}
+
 // BranchRepository persists branches.
 type BranchRepository interface {
 	List(ctx context.Context) ([]domain.Branch, error)
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.Branch, error)
 	Create(ctx context.Context, b *domain.Branch) error
 	Update(ctx context.Context, b *domain.Branch) error
+	// Wave 68 — apply geo + config patch in a single round-trip. The
+	// input shape mirrors UpdateBranchInput's optional fields; pointer
+	// nil = don't touch, *Clear=true = NULL the column.
+	ApplyBranchPatch(ctx context.Context, in UpdateBranchInput) error
+	// Wave 68 — config read for the editor.
+	FindConfig(ctx context.Context, id uuid.UUID) (*BranchConfigView, error)
 	CountByLevel(ctx context.Context) (map[string]int, error)
 }
 

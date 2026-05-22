@@ -245,9 +245,31 @@ type createBranchRequest struct {
 	ParentID *string `json:"parent_id,omitempty"`
 }
 
+// Wave 68 — updateBranchRequest grows to cover the geo + per-branch
+// operational config fields. Each *Clear pair lets the caller
+// explicitly NULL a column (useful for the SLA inheritance chain).
 type updateBranchRequest struct {
 	Name   *string `json:"name,omitempty"`
 	Active *bool   `json:"active,omitempty"`
+
+	GeoShapeGeoJSON *string `json:"geo_shape_geojson,omitempty"`
+	GeoShapeClear   *bool   `json:"geo_shape_clear,omitempty"`
+
+	ODPStrategy      *string `json:"odp_strategy,omitempty"`
+	ODPStrategyClear *bool   `json:"odp_strategy_clear,omitempty"`
+
+	CableDistance      *string `json:"cable_distance,omitempty"`
+	CableDistanceClear *bool   `json:"cable_distance_clear,omitempty"`
+
+	WOAutoAssign      *string `json:"wo_auto_assign,omitempty"`
+	WOAutoAssignClear *bool   `json:"wo_auto_assign_clear,omitempty"`
+
+	SLAAssignmentMinutes      *int  `json:"sla_assignment_minutes,omitempty"`
+	SLAAssignmentMinutesClear *bool `json:"sla_assignment_minutes_clear,omitempty"`
+	SLADispatchMinutes        *int  `json:"sla_dispatch_minutes,omitempty"`
+	SLADispatchMinutesClear   *bool `json:"sla_dispatch_minutes_clear,omitempty"`
+	SLAInstallMinutes         *int  `json:"sla_install_minutes,omitempty"`
+	SLAInstallMinutesClear    *bool `json:"sla_install_minutes_clear,omitempty"`
 }
 
 // =====================================================================

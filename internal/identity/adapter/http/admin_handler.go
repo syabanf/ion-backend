@@ -42,6 +42,13 @@ func (h *Handler) mountAdmin(r chi.Router) {
 	r.With(httpserver.RequirePermission("identity.branch.manage")).
 		Patch("/branches/{id}", h.updateBranch)
 
+	// Wave 68 — branch geo + per-branch operational config fetch.
+	// Lives on a separate route so the list/getBranch path stays a
+	// cheap projection; the detail/edit page pulls extra data only
+	// when the operator opens that surface.
+	r.With(httpserver.RequirePermission("identity.branch.read")).
+		Get("/branches/{id}/config", h.getBranchConfig)
+
 	// Audit
 	r.With(httpserver.RequirePermission("identity.audit.read")).
 		Get("/audit-logs", h.listAudit)
@@ -195,6 +202,33 @@ func (h *Handler) createBranch(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, http.StatusCreated, toBranchDTO(*b))
 }
 
+// Wave 68 — exposes the geo_shape (as GeoJSON) + odp_strategy +
+// cable_distance + wo_auto_assign + sla_* columns for the branch
+// editor. We read directly off the pool to avoid bloating the
+// branch domain entity (which models only the "always-on" fields).
+func (h *Handler) getBranchConfig(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpserver.WriteError(w, errors.Validation("branch.id_invalid", "id is not a valid uuid"))
+		return
+	}
+	cfg, err := h.uc.GetBranchConfig(r.Context(), id)
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	httpserver.WriteJSON(w, http.StatusOK, map[string]any{
+		"id":                     id.String(),
+		"geo_shape_geojson":      cfg.GeoShapeGeoJSON,
+		"odp_strategy":           cfg.ODPStrategy,
+		"cable_distance":         cfg.CableDistance,
+		"wo_auto_assign":         cfg.WOAutoAssign,
+		"sla_assignment_minutes": cfg.SLAAssignmentMinutes,
+		"sla_dispatch_minutes":   cfg.SLADispatchMinutes,
+		"sla_install_minutes":    cfg.SLAInstallMinutes,
+	})
+}
+
 func (h *Handler) updateBranch(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -210,6 +244,21 @@ func (h *Handler) updateBranch(w http.ResponseWriter, r *http.Request) {
 		ID:     id,
 		Name:   req.Name,
 		Active: req.Active,
+		// Wave 68 — pass through all the patch fields.
+		GeoShapeGeoJSON:           req.GeoShapeGeoJSON,
+		GeoShapeClear:             req.GeoShapeClear,
+		ODPStrategy:               req.ODPStrategy,
+		ODPStrategyClear:          req.ODPStrategyClear,
+		CableDistance:             req.CableDistance,
+		CableDistanceClear:        req.CableDistanceClear,
+		WOAutoAssign:              req.WOAutoAssign,
+		WOAutoAssignClear:         req.WOAutoAssignClear,
+		SLAAssignmentMinutes:      req.SLAAssignmentMinutes,
+		SLAAssignmentMinutesClear: req.SLAAssignmentMinutesClear,
+		SLADispatchMinutes:        req.SLADispatchMinutes,
+		SLADispatchMinutesClear:   req.SLADispatchMinutesClear,
+		SLAInstallMinutes:         req.SLAInstallMinutes,
+		SLAInstallMinutesClear:    req.SLAInstallMinutesClear,
 	})
 	if err != nil {
 		httpserver.WriteError(w, err)

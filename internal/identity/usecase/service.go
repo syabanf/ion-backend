@@ -365,16 +365,32 @@ func (s *Service) UpdateBranch(ctx context.Context, in port.UpdateBranchInput) (
 	if err != nil {
 		return nil, err
 	}
-	if in.Name != nil {
-		b.Name = *in.Name
+	// Step 1: name/active live on the domain entity — write through
+	// the canonical Update path. Only fire when one of the two fields
+	// is set; otherwise we'd needlessly bump updated_at via the patch.
+	if in.Name != nil || in.Active != nil {
+		if in.Name != nil {
+			b.Name = *in.Name
+		}
+		if in.Active != nil {
+			b.Active = *in.Active
+		}
+		if err := s.branches.Update(ctx, b); err != nil {
+			return nil, err
+		}
 	}
-	if in.Active != nil {
-		b.Active = *in.Active
-	}
-	if err := s.branches.Update(ctx, b); err != nil {
+	// Step 2: Wave 68 — geo + per-branch config columns are repo-only
+	// (no domain modelling yet). The patch is a sparse UPDATE that
+	// no-ops when no patch fields are set.
+	if err := s.branches.ApplyBranchPatch(ctx, in); err != nil {
 		return nil, err
 	}
 	return b, nil
+}
+
+// GetBranchConfig is the Wave-68 read for the editor surface.
+func (s *Service) GetBranchConfig(ctx context.Context, id uuid.UUID) (*port.BranchConfigView, error) {
+	return s.branches.FindConfig(ctx, id)
 }
 
 // validParentLevel enforces: regional has no parent;
