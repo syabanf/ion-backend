@@ -17,6 +17,7 @@ import (
 
 	"github.com/ion-core/backend/internal/identity/domain"
 	"github.com/ion-core/backend/internal/identity/port"
+	"github.com/ion-core/backend/pkg/audit"
 	"github.com/ion-core/backend/pkg/auth"
 	derrors "github.com/ion-core/backend/pkg/errors"
 )
@@ -36,12 +37,28 @@ type Service struct {
 
 	// M5 r3 — HRIS availability stub. Nil-safe so r1 wiring keeps working.
 	availability port.AvailabilityRepository
+
+	// Wave 81 — audit writer (TC-USR-019). Defaults to Nop; mutating
+	// methods (CreateUser, UpdateUser, SetUserActive) fire SafeWrite so
+	// the admin audit viewer renders the change without callers
+	// touching identity.audit_logs directly. Wire via WithAudit.
+	auditW audit.Writer
 }
 
 // WithAvailability attaches the HRIS-stub repo. Optional; the cmd binary
 // always wires it.
 func (s *Service) WithAvailability(a port.AvailabilityRepository) *Service {
 	s.availability = a
+	return s
+}
+
+// WithAudit wires the append-only audit writer. Wave 81 — every
+// mutating user-management call (CreateUser, UpdateUser, SetUserActive)
+// emits a row through this writer. Defaults to audit.Nop{}.
+func (s *Service) WithAudit(w audit.Writer) *Service {
+	if w != nil {
+		s.auditW = w
+	}
 	return s
 }
 
@@ -70,6 +87,7 @@ func NewService(
 		tokens:      tokens,
 		refreshTTL:  refreshTTL,
 		log:         log,
+		auditW:      audit.Nop{},
 	}
 }
 
@@ -266,6 +284,16 @@ func (s *Service) CreateUser(ctx context.Context, in port.CreateUserInput) (*dom
 	if err := s.users.Create(ctx, u, in.RoleNames, in.SalesType, in.TechnicianGrade); err != nil {
 		return nil, err
 	}
+	// Wave 81 (TC-USR-019) — provisioning event. We record the new email
+	// + role list as the "after" payload so the audit viewer can render
+	// who was provisioned with what access.
+	audit.SafeWrite(ctx, s.auditW, audit.Entry{
+		Module:     "identity",
+		RecordType: "user",
+		RecordID:   u.ID.String(),
+		After:      u.Email + " roles=" + strings.Join(in.RoleNames, ","),
+		Reason:     "user_created",
+	})
 	return u, nil
 }
 
@@ -288,7 +316,55 @@ func (s *Service) UpdateUser(ctx context.Context, in port.UpdateUserInput) (*dom
 	}
 	// TODO(rbac): walk the reports_to chain to reject loops. For now we rely
 	// on the self-check; a recursive CTE check is on the M1 polish list.
-	return s.users.Update(ctx, in)
+	u, err := s.users.Update(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	// Wave 81 (TC-USR-019) — record the patch surface. We don't know
+	// the pre-edit field values at this layer (the repo applies the
+	// patch atomically); the diff is captured by the patch shape
+	// itself, which the admin audit viewer renders alongside the row's
+	// current state.
+	audit.SafeWrite(ctx, s.auditW, audit.Entry{
+		Module:     "identity",
+		RecordType: "user",
+		RecordID:   in.ID.String(),
+		After:      summarizeUpdate(in),
+		Reason:     "user_updated",
+	})
+	return u, nil
+}
+
+// summarizeUpdate produces a compact one-line description of the
+// non-nil fields in an UpdateUserInput. Used in audit emission so the
+// admin viewer can show "what changed" without an expensive diff query.
+func summarizeUpdate(in port.UpdateUserInput) string {
+	parts := []string{}
+	if in.EmployeeID != nil {
+		parts = append(parts, "employee_id")
+	}
+	if in.FullName != nil {
+		parts = append(parts, "full_name")
+	}
+	if in.Phone != nil {
+		parts = append(parts, "phone")
+	}
+	if in.BranchID != nil || in.ClearBranch {
+		parts = append(parts, "branch")
+	}
+	if in.ReportsToID != nil || in.ClearReportsTo {
+		parts = append(parts, "reports_to")
+	}
+	if in.SalesType != nil || in.ClearSalesType {
+		parts = append(parts, "sales_type")
+	}
+	if in.TechnicianGrade != nil || in.ClearTechGrade {
+		parts = append(parts, "technician_grade")
+	}
+	if len(parts) == 0 {
+		return "no-op"
+	}
+	return "fields=" + strings.Join(parts, ",")
 }
 
 func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (*domain.User, error) {
@@ -327,7 +403,26 @@ func (s *Service) ListUsers(ctx context.Context, f port.UserListFilter) ([]port.
 }
 
 func (s *Service) SetUserActive(ctx context.Context, id uuid.UUID, active bool) error {
-	return s.users.SetActive(ctx, id, active)
+	if err := s.users.SetActive(ctx, id, active); err != nil {
+		return err
+	}
+	// Wave 81 (TC-USR-019) — activate/deactivate is one of the most
+	// security-relevant transitions; we always emit even though it's a
+	// boolean flip, so the audit viewer captures who lost / regained
+	// access and when.
+	state := "false"
+	if active {
+		state = "true"
+	}
+	audit.SafeWrite(ctx, s.auditW, audit.Entry{
+		Module:       "identity",
+		RecordType:   "user",
+		RecordID:     id.String(),
+		FieldChanged: "is_active",
+		After:        state,
+		Reason:       "user_active_set",
+	})
+	return nil
 }
 
 // =====================================================================

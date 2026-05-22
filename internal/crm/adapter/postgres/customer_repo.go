@@ -132,6 +132,59 @@ func (r *CustomerRepository) FindByID(ctx context.Context, id uuid.UUID) (*domai
 	return r.scanCustomer(row)
 }
 
+// UpdateLockedSchemaVersions persists the resolver-snapshotted version
+// IDs onto a customer row. Wave 80b (TC-SCH-011/015/023/026,
+// TC-PRD-025). Each kind is independent — nil entries are no-ops, so
+// callers can lock a subset without disturbing the rest.
+//
+// We build the UPDATE list dynamically because COALESCE(?, col) would
+// erase prior locks when a kind hasn't been resolved (e.g. legacy row
+// being incrementally migrated). Dynamic SET is clearer than a
+// pathological COALESCE chain.
+func (r *CustomerRepository) UpdateLockedSchemaVersions(
+	ctx context.Context, customerID uuid.UUID, locks port.LockedSchemaVersions,
+) error {
+	sets := []string{}
+	args := []any{customerID}
+	add := func(col string, val *uuid.UUID) {
+		if val == nil {
+			return
+		}
+		args = append(args, *val)
+		sets = append(sets, col+" = $"+itoa(len(args)))
+	}
+	add("locked_onboarding_schema_version_id", locks.Onboarding)
+	add("locked_billing_schema_version_id", locks.Billing)
+	add("locked_service_schema_version_id", locks.Service)
+	add("locked_commission_schema_version_id", locks.Commission)
+	add("locked_suspension_schema_version_id", locks.Suspension)
+	if len(sets) == 0 {
+		return nil // No-op when caller passed all nils.
+	}
+	sql := "UPDATE crm.customers SET " +
+		joinComma(sets) +
+		", updated_at = NOW() WHERE id = $1"
+	tag, err := r.pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return mapDBError(err, "customer.lock_update", "update locked schema versions")
+	}
+	if tag.RowsAffected() == 0 {
+		return derrors.NotFound("customer.not_found", "customer not found")
+	}
+	return nil
+}
+
+func joinComma(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	out := parts[0]
+	for _, p := range parts[1:] {
+		out += ", " + p
+	}
+	return out
+}
+
 // scanCustomer is the single scan path post-0018. We only read
 // `nik_encrypted`; the plaintext column is gone. When the bytea is
 // empty (legacy rows that were already NULL before 0017 or rows

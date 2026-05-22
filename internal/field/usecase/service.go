@@ -26,7 +26,9 @@ import (
 
 	"github.com/ion-core/backend/internal/field/domain"
 	"github.com/ion-core/backend/internal/field/port"
+	"github.com/ion-core/backend/pkg/audit"
 	derrors "github.com/ion-core/backend/pkg/errors"
+	"github.com/ion-core/backend/pkg/notifyx"
 )
 
 type Service struct {
@@ -45,6 +47,16 @@ type Service struct {
 	branchSLA  port.BranchSLAResolver     // Wave 65 — optional; nil falls back to 24h
 	addrToBranch port.AddressToBranchResolver // Wave 65 — optional; nil keeps pre-stamped branch_id
 	teamLookup port.TeamLeaderLookup        // Wave 65 — optional; nil disables escalation chain
+
+	// Wave 81 (TC-TLP-022) — audit writer. Defaults to Nop; mutating
+	// dispatch methods (AssignTechnicians, UpsertPair via assign) emit
+	// rows so the operations audit viewer can render dispatch history.
+	auditW audit.Writer
+
+	// Wave 81 (TC-TLP-014/023) — push dispatcher. Nil-safe; when wired,
+	// AssignTechnicians fires a push to the lead + observer so the
+	// tech app surfaces the new assignment without polling.
+	notifier *notifyx.Dispatcher
 }
 
 // WithActivation attaches the activation gateway so VerifyBAST(approved)
@@ -83,7 +95,26 @@ func NewService(
 	return &Service{
 		wos: wos, assigns: assigns, checklists: checklists,
 		resolutions: resolutions, basts: basts, teams: teams, crm: crm,
+		auditW: audit.Nop{},
 	}
+}
+
+// WithAudit wires the append-only audit writer. Wave 81 — AssignTechnicians
+// and related dispatch mutations emit rows so the operations audit
+// viewer can render dispatch history. Defaults to audit.Nop{}.
+func (s *Service) WithAudit(w audit.Writer) *Service {
+	if w != nil {
+		s.auditW = w
+	}
+	return s
+}
+
+// WithNotifier wires the push dispatcher. Wave 81 (TC-TLP-014/023) —
+// AssignTechnicians fires a push to the lead + observer so the tech
+// app surfaces the new assignment without polling. Nil-safe.
+func (s *Service) WithNotifier(d *notifyx.Dispatcher) *Service {
+	s.notifier = d
+	return s
 }
 
 // WithBilling attaches the billing gateway so VerifyBAST enforces the
@@ -174,6 +205,21 @@ func (s *Service) CreateWOFromOrder(ctx context.Context, in port.CreateWOFromOrd
 	// pick them up. The 'created' status is reserved for soft-creates that
 	// might not have an order yet (not used in round 1).
 	w.Status = domain.WOStatusUnassigned
+
+	// Wave 81 (QA TC-TLP-001/002/003): route the WO to the Team Leader
+	// whose scope covers the install branch. The resolver chain in
+	// branch.Resolver walks Sub Area → Area → Regional and returns the
+	// first TL found. When no TL exists at any level, leave team_leader_id
+	// null — the WO will surface as "Unrouted" in the dashboard, which is
+	// the right escalation signal to Ops Manager (TC-TLP-003).
+	//
+	// teamLookup is optional (set via WithTeamLeaderLookup); when nil,
+	// behavior matches pre-Wave-81: TL stays null until manual RouteToTeam.
+	if s.teamLookup != nil && proj.BranchID != nil {
+		if tl, _, _ := s.teamLookup.FindTeamLeader(ctx, *proj.BranchID); tl != nil {
+			w.TeamLeaderID = tl
+		}
+	}
 
 	if err := s.wos.Create(ctx, w); err != nil {
 		return nil, err
@@ -335,6 +381,55 @@ func (s *Service) AssignTechnicians(ctx context.Context, in port.AssignTechnicia
 	if d.WO.Status == domain.WOStatusUnassigned || d.WO.Status == domain.WOStatusRescheduled {
 		if err := s.wos.UpdateStatus(ctx, in.WOID, domain.WOStatusAssigned); err != nil {
 			return nil, err
+		}
+	}
+
+	// Wave 81 (TC-TLP-022) — audit the dispatch. Record the lead +
+	// observer ids on the "after" side so the operations viewer can
+	// render who was on the pair without joining back to assignments.
+	auditAfter := "lead=" + in.LeadID.String()
+	if in.ObserverID != nil {
+		auditAfter += " observer=" + in.ObserverID.String()
+	}
+	audit.SafeWrite(ctx, s.auditW, audit.Entry{
+		UserID:     in.AssignedBy,
+		Module:     "field",
+		RecordType: "work_order",
+		RecordID:   in.WOID.String(),
+		After:      auditAfter,
+		Reason:     "technicians_assigned",
+	})
+
+	// Wave 81 (TC-TLP-014/023) — push the assignment to the techs.
+	// Best-effort; failures are logged inside notifyx without breaking
+	// the dispatch flow. We send two distinct messages so each tech
+	// gets a role-appropriate body.
+	if s.notifier != nil {
+		s.notifier.Send(ctx,
+			notifyx.Target{UserID: in.LeadID},
+			notifyx.Message{
+				Title:    "New work order assigned",
+				Body:     "You're the lead on a new job. Open the tech app to review the brief.",
+				DeepLink: "ion-tech://work-orders/" + in.WOID.String(),
+				Topic:    "wo_assigned",
+				Data: map[string]string{
+					"wo_id": in.WOID.String(),
+					"role":  string(domain.WORoleLead),
+				},
+			})
+		if in.ObserverID != nil {
+			s.notifier.Send(ctx,
+				notifyx.Target{UserID: *in.ObserverID},
+				notifyx.Message{
+					Title:    "You're paired as observer",
+					Body:     "A senior tech is leading; you're shadowing. Open the tech app for details.",
+					DeepLink: "ion-tech://work-orders/" + in.WOID.String(),
+					Topic:    "wo_assigned",
+					Data: map[string]string{
+						"wo_id": in.WOID.String(),
+						"role":  string(domain.WORoleObserver),
+					},
+				})
 		}
 	}
 	return s.GetWO(ctx, in.WOID)

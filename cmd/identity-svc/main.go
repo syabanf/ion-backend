@@ -17,6 +17,7 @@ import (
 	platformhttp "github.com/ion-core/backend/internal/platform/adapter/http"
 	platformpg "github.com/ion-core/backend/internal/platform/adapter/postgres"
 	platformusecase "github.com/ion-core/backend/internal/platform/usecase"
+	auditpg "github.com/ion-core/backend/pkg/audit/postgres"
 	"github.com/ion-core/backend/pkg/auth"
 	"github.com/ion-core/backend/pkg/config"
 	"github.com/ion-core/backend/pkg/database"
@@ -59,8 +60,12 @@ func main() {
 
 	// --- Use case ---
 	availabilityRepo := identitypg.NewAvailabilityRepository(pool)
+	// Wave 81 (TC-USR-019) — mutating user-management calls emit
+	// audit_logs rows via this writer.
+	auditWriter := auditpg.NewWriter(pool)
 	svc := usecase.NewService(userRepo, roleRepo, branchRepo, auditRepo, configRepo, refreshRepo, hasher, tokens, cfg.JWTRefreshTTL, log).
-		WithAvailability(availabilityRepo)
+		WithAvailability(availabilityRepo).
+		WithAudit(auditWriter)
 
 	// --- Driving adapter (HTTP) ---
 	// Per-IP rate limit on /auth/login: burst 10 attempts, refill 0.5/sec

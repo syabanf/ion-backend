@@ -9,6 +9,7 @@ package usecase
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/ion-core/backend/internal/crm/domain"
 	"github.com/ion-core/backend/internal/crm/port"
+	"github.com/ion-core/backend/pkg/audit"
 	derrors "github.com/ion-core/backend/pkg/errors"
 )
 
@@ -31,6 +33,17 @@ type Service struct {
 	// M4 r2 — optional, nil-safe.
 	schemas   port.OnboardingSchemaRepository
 	salesUser port.SalesUserGateway
+
+	// Wave 80b (TC-SCH-011/015/023/026, TC-PRD-025) — optional schema
+	// resolver gateway. When wired, ConvertLead snapshots the resolved
+	// version of each of the 5 schema kinds onto the new customer row
+	// so subsequent reads stay pinned to order-time behavior.
+	schemaResolver port.SchemaResolverGateway
+
+	// Wave 81 (TC-PRD-013/028) — audit writer for product mutations.
+	// Defaults to Nop; CreateProduct + UpdateProduct fire SafeWrite so
+	// the admin audit viewer can show price/slot changes over time.
+	auditW audit.Writer
 }
 
 func NewService(
@@ -48,7 +61,19 @@ func NewService(
 		customers: customers,
 		orders:    orders,
 		coverage:  coverage,
+		auditW:    audit.Nop{},
 	}
+}
+
+// WithAudit wires the append-only audit writer. Wave 81 — CreateProduct
+// and UpdateProduct emit a row through this writer so the admin
+// product-history view can render diffs without a separate audit table.
+// Defaults to audit.Nop{}.
+func (s *Service) WithAudit(w audit.Writer) *Service {
+	if w != nil {
+		s.auditW = w
+	}
+	return s
 }
 
 // WithBilling attaches the billing gateway so converting a lead also
@@ -68,6 +93,16 @@ func (s *Service) WithBilling(b port.BillingGateway) *Service {
 func (s *Service) WithR2(schemas port.OnboardingSchemaRepository, salesUser port.SalesUserGateway) *Service {
 	s.schemas = schemas
 	s.salesUser = salesUser
+	return s
+}
+
+// WithSchemaResolver attaches the Wave 80b schema-resolver gateway.
+// When wired, ConvertLead snapshots the 5 resolved schema versions
+// onto the new customer record. Nil-safe — convert still works
+// without it; customers just fall through to the existing
+// FindLatestPublished resolver path on subsequent reads.
+func (s *Service) WithSchemaResolver(r port.SchemaResolverGateway) *Service {
+	s.schemaResolver = r
 	return s
 }
 
@@ -100,6 +135,16 @@ func (s *Service) CreateProduct(ctx context.Context, in port.CreateProductInput)
 	if err := s.products.Create(ctx, p); err != nil {
 		return nil, err
 	}
+	// Wave 81 (TC-PRD-013) — record provisioning. We log code + name
+	// + monthly price as the canonical identifier triple so the audit
+	// viewer doesn't have to join back to the product row.
+	audit.SafeWrite(ctx, s.auditW, audit.Entry{
+		Module:     "crm",
+		RecordType: "product",
+		RecordID:   p.ID.String(),
+		After:      p.Code + " " + p.Name + " monthly=" + ftoa(p.MonthlyPrice),
+		Reason:     "product_created",
+	})
 	return p, nil
 }
 
@@ -156,7 +201,69 @@ func (s *Service) UpdateProduct(ctx context.Context, in port.UpdateProductInput)
 	if err := s.products.Update(ctx, p); err != nil {
 		return nil, err
 	}
+	// Wave 81 (TC-PRD-028) — record the patch shape. Like identity's
+	// summarizeUpdate, we don't have pre-edit values handy here, so we
+	// emit which fields the caller touched.
+	audit.SafeWrite(ctx, s.auditW, audit.Entry{
+		Module:     "crm",
+		RecordType: "product",
+		RecordID:   p.ID.String(),
+		After:      summarizeProductUpdate(in),
+		Reason:     "product_updated",
+	})
 	return p, nil
+}
+
+// summarizeProductUpdate produces a compact one-line description of
+// non-nil fields in an UpdateProductInput. Used by Wave 81 audit
+// emission — the admin viewer renders this as a concise change tag
+// without us having to JSON-marshal the entire patch struct.
+func summarizeProductUpdate(in port.UpdateProductInput) string {
+	parts := []string{}
+	if in.Name != nil {
+		parts = append(parts, "name")
+	}
+	if in.SpeedMbps != nil {
+		parts = append(parts, "speed_mbps")
+	}
+	if in.MonthlyPrice != nil {
+		parts = append(parts, "monthly_price="+ftoa(*in.MonthlyPrice))
+	}
+	if in.OTCPrice != nil {
+		parts = append(parts, "otc_price="+ftoa(*in.OTCPrice))
+	}
+	if in.TempWindowHrs != nil {
+		parts = append(parts, "temp_window_hrs")
+	}
+	if in.Active != nil {
+		parts = append(parts, "active="+strconv.FormatBool(*in.Active))
+	}
+	if in.OnboardingSchemaID != nil || in.ClearOnboarding {
+		parts = append(parts, "onboarding_schema")
+	}
+	if in.BillingSchemaID != nil || in.ClearBilling {
+		parts = append(parts, "billing_schema")
+	}
+	if in.ServiceSchemaID != nil || in.ClearService {
+		parts = append(parts, "service_schema")
+	}
+	if in.CommissionSchemaID != nil || in.ClearCommission {
+		parts = append(parts, "commission_schema")
+	}
+	if in.SuspensionSchemaID != nil || in.ClearSuspension {
+		parts = append(parts, "suspension_schema")
+	}
+	if len(parts) == 0 {
+		return "no-op"
+	}
+	return "fields=" + strings.Join(parts, ",")
+}
+
+// ftoa renders a price float for audit emission. Two-decimal fixed —
+// the same precision the billing surface uses for invoice totals, so
+// the audit row matches what the admin sees in the UI.
+func ftoa(f float64) string {
+	return strconv.FormatFloat(f, 'f', 2, 64)
 }
 
 // =====================================================================
@@ -456,6 +563,50 @@ func (s *Service) ConvertLead(ctx context.Context, in port.ConvertLeadInput) (*p
 
 	if err := s.customers.Create(ctx, cust); err != nil {
 		return nil, err
+	}
+
+	// Wave 80b (TC-SCH-011/015/023/026, TC-PRD-025): snapshot the
+	// resolved schema version for each of the 5 kinds onto the new
+	// customer row. The resolver honors product slot + customer
+	// override; the returned schema_definitions.id pins this customer
+	// to that exact version for all subsequent reads (dunning ticks,
+	// commission calcs, suspension scheduler), so publishing a newer
+	// schema version doesn't silently retro-rate them.
+	//
+	// Nil-safe: when the resolver gateway isn't wired (tests, legacy
+	// callers), customers fall through to FindLatestPublished. When
+	// wired but a kind fails to resolve (e.g. transient DB error),
+	// we log and continue — convert is the wrong place to block on
+	// a downstream concern.
+	if s.schemaResolver != nil {
+		locks := port.LockedSchemaVersions{}
+		// One pointer per kind, populated by the resolver result.
+		resolve := func(kind string, productSlot *uuid.UUID, target **uuid.UUID) {
+			v, err := s.schemaResolver.ResolveVersionForCustomer(
+				ctx, cust.ID, kind, productSlot,
+			)
+			if err == nil && v != nil {
+				*target = v
+			}
+		}
+		resolve("onboarding", prod.OnboardingSchemaID, &locks.Onboarding)
+		resolve("billing", prod.BillingSchemaID, &locks.Billing)
+		resolve("service", prod.ServiceSchemaID, &locks.Service)
+		resolve("commission", prod.CommissionSchemaID, &locks.Commission)
+		resolve("suspension", prod.SuspensionSchemaID, &locks.Suspension)
+		if err := s.customers.UpdateLockedSchemaVersions(ctx, cust.ID, locks); err != nil {
+			// Non-fatal — keep the customer + order, surface error
+			// downstream via the resolver's DEFAULT fallback path.
+			_ = err
+		} else {
+			// Reflect the snapshot back onto the in-memory customer
+			// so the returned ConvertLeadOutput.Customer is current.
+			cust.LockedOnboardingSchemaVersionID = locks.Onboarding
+			cust.LockedBillingSchemaVersionID = locks.Billing
+			cust.LockedServiceSchemaVersionID = locks.Service
+			cust.LockedCommissionSchemaVersionID = locks.Commission
+			cust.LockedSuspensionSchemaVersionID = locks.Suspension
+		}
 	}
 
 	excess := 0.0

@@ -23,6 +23,7 @@ import (
 	crmbilling "github.com/ion-core/backend/internal/crm/adapter/billing"
 	crmid "github.com/ion-core/backend/internal/crm/adapter/identity"
 	crmnet "github.com/ion-core/backend/internal/crm/adapter/network"
+	crmplatform "github.com/ion-core/backend/internal/crm/adapter/platform"
 	crmpg "github.com/ion-core/backend/internal/crm/adapter/postgres"
 	crmusecase "github.com/ion-core/backend/internal/crm/usecase"
 	networkpg "github.com/ion-core/backend/internal/network/adapter/postgres"
@@ -30,6 +31,7 @@ import (
 	networkusecase "github.com/ion-core/backend/internal/network/usecase"
 	platformpg "github.com/ion-core/backend/internal/platform/adapter/postgres"
 	platformusecase "github.com/ion-core/backend/internal/platform/usecase"
+	auditpg "github.com/ion-core/backend/pkg/audit/postgres"
 	"github.com/ion-core/backend/pkg/auth"
 	"github.com/ion-core/backend/pkg/config"
 	"github.com/ion-core/backend/pkg/cryptutil"
@@ -123,9 +125,21 @@ func main() {
 	schemaRepo := crmpg.NewOnboardingSchemaRepository(pool)
 	salesUserGW := crmid.NewSalesUserGateway(pool)
 
+	// Wave 80b — schema-resolver gateway for lead-conversion lock snapshot.
+	// At convert, the resolver picks the version of each of the 5 schema
+	// kinds and CRM persists the IDs onto the new customer record so
+	// later publishes don't retro-rate them (TC-SCH-011/023/026, TC-PRD-025).
+	crmSchemaResolver := crmplatform.NewSchemaResolverGateway(platformSvc)
+
+	// Wave 81 (TC-PRD-013/028) — product mutations write through
+	// pkg/audit so the admin viewer can render product history.
+	crmAuditWriter := auditpg.NewWriter(pool)
+
 	svc := crmusecase.NewService(productRepo, leadRepo, docRepo, customerRepo, orderRepo, coverageGW).
 		WithBilling(billingGW).
-		WithR2(schemaRepo, salesUserGW)
+		WithR2(schemaRepo, salesUserGW).
+		WithSchemaResolver(crmSchemaResolver).
+		WithAudit(crmAuditWriter)
 
 	// Tunes: burst=6 lets a rep batch six KTPs quickly, refill=0.1/s caps
 	// sustained throughput at six per minute — well above onboarding

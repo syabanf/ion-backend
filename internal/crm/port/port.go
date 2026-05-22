@@ -181,6 +181,22 @@ type CustomerRepository interface {
 	Create(ctx context.Context, c *domain.Customer) error
 	List(ctx context.Context, status string, limit, offset int) ([]domain.Customer, int, error)
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.Customer, error)
+	// Wave 80b (TC-SCH-011/015/023/026, TC-PRD-025): persist locked
+	// schema version IDs onto an existing customer. Used at lead
+	// conversion right after the resolver snapshots each kind.
+	// Nil entries are no-ops; non-nil values overwrite.
+	UpdateLockedSchemaVersions(ctx context.Context, customerID uuid.UUID, locks LockedSchemaVersions) error
+}
+
+// LockedSchemaVersions is the payload UpdateLockedSchemaVersions accepts.
+// Each pointer is independent — only non-nil kinds get persisted, so
+// callers can lock a subset of kinds without disturbing the rest.
+type LockedSchemaVersions struct {
+	Onboarding  *uuid.UUID
+	Billing     *uuid.UUID
+	Service     *uuid.UUID
+	Commission  *uuid.UUID
+	Suspension  *uuid.UUID
 }
 
 type OrderRepository interface {
@@ -195,6 +211,27 @@ type OrderRepository interface {
 // context can ship in its own binary later without an in-process call.
 type CoverageGateway interface {
 	Check(ctx context.Context, lat, lng float64) (*CoverageDecision, error)
+}
+
+// SchemaResolverGateway is a *driven* port back to the platform bounded
+// context. Wave 80b (TC-SCH-011/015/023/026, TC-PRD-025) uses it at lead
+// conversion to snapshot the resolved schema version for each of the 5
+// kinds onto the new customer record. Failures here are non-fatal —
+// conversion still succeeds; the customer just falls through to the
+// existing DEFAULT-code resolver path on subsequent reads. The audit
+// log captures the gap.
+//
+// Each kind is its own RPC because the platform service's resolver
+// signature is per-kind. Returns the resolved SchemaDefinition.ID (the
+// row in platform.schema_definitions) — that's what gets persisted to
+// crm.customers.locked_<kind>_schema_version_id.
+type SchemaResolverGateway interface {
+	ResolveVersionForCustomer(
+		ctx context.Context,
+		customerID uuid.UUID,
+		kind string, // 'onboarding' | 'billing' | 'service' | 'commission' | 'suspension'
+		productSchemaSlotID *uuid.UUID,
+	) (*uuid.UUID, error)
 }
 
 // BillingGateway is a *driven* port to the billing context, invoked from

@@ -42,12 +42,14 @@ import (
 	uploadshttp "github.com/ion-core/backend/internal/uploads/adapter/http"
 	uploadspg "github.com/ion-core/backend/internal/uploads/adapter/postgres"
 	uploadsusecase "github.com/ion-core/backend/internal/uploads/usecase"
+	auditpg "github.com/ion-core/backend/pkg/audit/postgres"
 	"github.com/ion-core/backend/pkg/auth"
 	"github.com/ion-core/backend/pkg/config"
 	"github.com/ion-core/backend/pkg/cryptutil"
 	"github.com/ion-core/backend/pkg/database"
 	"github.com/ion-core/backend/pkg/httpserver"
 	"github.com/ion-core/backend/pkg/logger"
+	"github.com/ion-core/backend/pkg/notifyx"
 	"github.com/ion-core/backend/pkg/platformconfig"
 	"github.com/ion-core/backend/pkg/uploads"
 )
@@ -189,6 +191,14 @@ func main() {
 	// usecase's perspective; nil falls back to pre-Wave-65 behavior.
 	branchResolver := fieldbranch.New(pool)
 
+	// Wave 81 (TC-TLP-014/022/023) — audit writer + push dispatcher
+	// for dispatch mutations. Audit captures every AssignTechnicians
+	// call into identity.audit_logs; the dispatcher fans an
+	// assignment push to lead + observer (default StubPush logs only —
+	// swap to FCM via WithProvider when credentials land).
+	fieldAuditW := auditpg.NewWriter(pool)
+	fieldNotifier := notifyx.New(pool, log)
+
 	svc := fieldusecase.NewService(woRepo, assignRepo, checklistRepo, resolutionRepo, bastRepo, teamRepo, crmGW).
 		WithBilling(fieldBillingGW).
 		WithReschedule(rescheduleRepo).
@@ -197,7 +207,9 @@ func main() {
 		WithActivation(activator).
 		WithBranchSLAResolver(branchResolver).
 		WithAddressResolver(branchResolver).
-		WithTeamLeaderLookup(branchResolver)
+		WithTeamLeaderLookup(branchResolver).
+		WithAudit(fieldAuditW).
+		WithNotifier(fieldNotifier)
 
 	handler := fieldhttp.NewHandler(svc, verifier)
 	uploadHandler := uploadshttp.NewHandler(uploadSvc, localStore, verifier)
