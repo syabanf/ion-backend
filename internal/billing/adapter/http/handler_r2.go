@@ -96,8 +96,8 @@ func (h *Handler) runTick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.WriteJSON(w, http.StatusOK, tickReportDTO{
-		StartedAt:             rep.StartedAt.UTC().Format(time.RFC3339),
-		CompletedAt:           rep.CompletedAt.UTC().Format(time.RFC3339),
+		StartedAt:             httpserver.FormatRFC3339(rep.StartedAt),
+		CompletedAt:           httpserver.FormatRFC3339(rep.CompletedAt),
 		RecurringGenerated:    rep.RecurringGenerated,
 		RecurringSkipped:      rep.RecurringSkipped,
 		LateFeesApplied:       rep.LateFeesApplied,

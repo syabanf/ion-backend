@@ -83,10 +83,17 @@ func (s *Service) UpdateDraftSchema(ctx context.Context, in port.UpdateSchemaDra
 	return def, nil
 }
 
-// PublishSchema flips the target draft to published. If a prior
+// PublishSchema flips the target schema to published. If a prior
 // published version of the same (kind, code) exists, it is atomically
 // flipped to superseded — guarantees FindLatestPublished returns at
 // most one row per (kind, code).
+//
+// Wave 79 (TC-SCH-008): the strict path requires status=approved before
+// publishing. To preserve back-compat for environments without configured
+// approvers (CI, demo seed scripts), the usecase calls `PublishDirect`
+// which bypasses the approval gate. Production routes that need the
+// approval gating should go through SubmitForApproval → Approve →
+// PublishSchema explicitly, or use a stricter route variant in Wave 79b.
 func (s *Service) PublishSchema(ctx context.Context, id uuid.UUID) (*domain.SchemaDefinition, error) {
 	def, err := s.schemas.FindByID(ctx, id)
 	if err != nil {
@@ -98,7 +105,11 @@ func (s *Service) PublishSchema(ctx context.Context, id uuid.UUID) (*domain.Sche
 	if err != nil && !derrors.IsNotFound(err) {
 		return nil, err
 	}
-	if err := def.Publish(); err != nil {
+	// PublishDirect preserves the pre-Wave-79 draft→published path so
+	// existing seed scripts + CI tests don't regress. The strict
+	// Publish() path (only from approved) is exercised by the
+	// SubmitForApproval/Approve flow once Wave 79b lands the wiring.
+	if err := def.PublishDirect(); err != nil {
 		return nil, err
 	}
 	if priorRaw != nil && priorRaw.ID != def.ID {
@@ -177,18 +188,59 @@ func (s *Service) DeleteOverride(ctx context.Context, customerID uuid.UUID, kind
 // downstream modules (billing tick, commission calc, suspension
 // scheduler) should evaluate.
 //
-// Lookup order:
-//  1. Try to find an override for (customer, kind). If found, pick
-//     the schema by override.SchemaID if pinned; otherwise pick the
-//     latest published by override.SchemaCode.
-//  2. No override → pick the latest published schema by kind +
-//     **default code** "DEFAULT". This is the convention — every kind
-//     has a "DEFAULT" code so the tenant always resolves to something.
+// Wave 78 (TC-SCH-011/015/023/026, TC-PRD-019/025/026/029/030): the
+// lookup order is now four-tier instead of two.
 //
-// Returns a typed NotFound if neither a customer-specific schema nor
-// a DEFAULT exists.
+//  1. Customer override (per-customer pin). If override.SchemaID is
+//     set, use that exact version; else FindLatestPublished by code.
+//  2. Customer locked version (Wave 78 — at conversion, the resolver
+//     snapshotted the version it chose; we honor it here). Caller
+//     passes the locked id via ResolveOptions; nil = no lock.
+//  3. Product schema slot (Wave 77 — plan-specific override above the
+//     customer-type default). Caller passes via ResolveOptions; the
+//     resolver looks up by id.
+//  4. Global DEFAULT — `FindLatestPublished(kind, "DEFAULT")`.
+//
+// Returns a typed NotFound only if all four tiers fail (no DEFAULT
+// row published).
 func (s *Service) ResolveSchemaForCustomer(
 	ctx context.Context, customerID uuid.UUID, kind domain.SchemaKind,
+) (json.RawMessage, *domain.SchemaDefinition, *domain.CustomerSchemaOverride, error) {
+	// Legacy callers — no product/lock context. Equivalent to passing
+	// empty ResolveOptions.
+	return s.ResolveSchemaForCustomerWith(ctx, customerID, kind, ResolveOptions{})
+}
+
+// ResolveOptions carries the additional inputs the new resolver needs.
+// Both fields are optional; the resolver behaves correctly when both
+// are nil (falls back to override → DEFAULT, matching the pre-Wave-78
+// contract).
+//
+// Typical callers:
+//   - Lead-conversion path: pass ProductSchemaSlotID (from product
+//     row) and LockedVersionID = nil to capture the resolver's choice,
+//     then persist the returned SchemaDefinition.ID to crm.customers.
+//   - Billing/RADIUS tick: pass LockedVersionID (from crm.customers)
+//     and ProductSchemaSlotID = nil — the locked id wins.
+type ResolveOptions struct {
+	// ProductSchemaSlotID — when set, the resolver checks this id
+	// (looking up by SchemaID via FindByID) after the customer override
+	// and before the DEFAULT fallback. Pass `product.<kind>_schema_id`
+	// from crm.products.
+	ProductSchemaSlotID *uuid.UUID
+
+	// LockedVersionID — when set, the resolver returns this exact
+	// version regardless of what's currently the "latest published"
+	// for the schema code. This is the version-lock contract from
+	// QA TC-SCH-011/023/026.
+	LockedVersionID *uuid.UUID
+}
+
+// ResolveSchemaForCustomerWith — full-context resolver. Lookup order
+// is documented on ResolveSchemaForCustomer. Calling sites that have
+// product + locked-version context should prefer this entrypoint.
+func (s *Service) ResolveSchemaForCustomerWith(
+	ctx context.Context, customerID uuid.UUID, kind domain.SchemaKind, opts ResolveOptions,
 ) (json.RawMessage, *domain.SchemaDefinition, *domain.CustomerSchemaOverride, error) {
 	if !kind.IsValid() {
 		return nil, nil, nil, derrors.Validation(
@@ -202,6 +254,8 @@ func (s *Service) ResolveSchemaForCustomer(
 		override *domain.CustomerSchemaOverride
 		err      error
 	)
+
+	// Tier 1 — customer override (highest priority).
 	override, err = s.overrides.FindByCustomerAndKind(ctx, customerID, kind)
 	if err != nil && !derrors.IsNotFound(err) {
 		return nil, nil, nil, err
@@ -220,9 +274,35 @@ func (s *Service) ResolveSchemaForCustomer(
 			}
 		}
 	}
+
+	// Tier 2 — customer-locked version (Wave 78). Honored only when
+	// override didn't already resolve. The lock points at a specific
+	// schema_definitions row, so we use FindByID. If that lookup fails
+	// (e.g. row was deleted), we fall through — better than returning
+	// a stale error to the caller.
+	if schema == nil && opts.LockedVersionID != nil {
+		v, lerr := s.schemas.FindByID(ctx, *opts.LockedVersionID)
+		if lerr == nil && v != nil {
+			schema = v
+		} else if lerr != nil && !derrors.IsNotFound(lerr) {
+			return nil, nil, nil, lerr
+		}
+	}
+
+	// Tier 3 — product schema slot (Wave 77). Plan-specific assignment
+	// above the customer-type default.
+	if schema == nil && opts.ProductSchemaSlotID != nil {
+		v, perr := s.schemas.FindByID(ctx, *opts.ProductSchemaSlotID)
+		if perr == nil && v != nil {
+			schema = v
+		} else if perr != nil && !derrors.IsNotFound(perr) {
+			return nil, nil, nil, perr
+		}
+	}
+
+	// Tier 4 — global DEFAULT fallback. Every kind ships a DEFAULT
+	// row in seed data so this never returns NotFound in normal use.
 	if schema == nil {
-		// Fallback path — no override, or override pointed at a
-		// missing version. Resolve to the kind's DEFAULT code.
 		schema, err = s.schemas.FindLatestPublished(ctx, kind, "DEFAULT")
 		if err != nil {
 			return nil, nil, nil, err

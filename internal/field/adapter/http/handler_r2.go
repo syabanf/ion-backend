@@ -5,9 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
-
 	"github.com/ion-core/backend/internal/field/domain"
 	"github.com/ion-core/backend/internal/field/port"
 	"github.com/ion-core/backend/pkg/errors"
@@ -21,9 +18,8 @@ import (
 // =====================================================================
 
 func (h *Handler) rescheduleWO(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo")
+	if !ok {
 		return
 	}
 	var req rescheduleRequest
@@ -62,9 +58,8 @@ func (h *Handler) rescheduleWO(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listReschedules(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo")
+	if !ok {
 		return
 	}
 	out, err := h.uc.ListRescheduleHistory(r.Context(), id)
@@ -84,9 +79,8 @@ func (h *Handler) listReschedules(w http.ResponseWriter, r *http.Request) {
 // =====================================================================
 
 func (h *Handler) verifyBASTOTP(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("bast.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "bast")
+	if !ok {
 		return
 	}
 	var req verifyOTPRequest

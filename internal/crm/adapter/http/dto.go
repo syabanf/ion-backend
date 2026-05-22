@@ -17,10 +17,12 @@ package http
 
 import (
 	"encoding/json"
-	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ion-core/backend/internal/crm/domain"
 	"github.com/ion-core/backend/internal/crm/port"
+	"github.com/ion-core/backend/pkg/httpserver"
 	"github.com/ion-core/backend/pkg/sanitize"
 )
 
@@ -37,10 +39,16 @@ type productDTO struct {
 	OTCPrice                float64 `json:"otc_price"`
 	TempActivationWindowHrs int     `json:"temp_activation_window_hours"`
 	Active                  bool    `json:"active"`
+	// Wave 77 (TC-PRD-014/016/018/022/027): per-kind schema slots.
+	OnboardingSchemaID *string `json:"onboarding_schema_id,omitempty"`
+	BillingSchemaID    *string `json:"billing_schema_id,omitempty"`
+	ServiceSchemaID    *string `json:"service_schema_id,omitempty"`
+	CommissionSchemaID *string `json:"commission_schema_id,omitempty"`
+	SuspensionSchemaID *string `json:"suspension_schema_id,omitempty"`
 }
 
 func toProductDTO(p domain.Product) productDTO {
-	return productDTO{
+	d := productDTO{
 		ID:                      p.ID.String(),
 		Code:                    p.Code,
 		Name:                    p.Name,
@@ -50,6 +58,19 @@ func toProductDTO(p domain.Product) productDTO {
 		TempActivationWindowHrs: p.TempActivationWindowHrs,
 		Active:                  p.Active,
 	}
+	uuidPtrStr := func(u *uuid.UUID) *string {
+		if u == nil {
+			return nil
+		}
+		s := u.String()
+		return &s
+	}
+	d.OnboardingSchemaID = uuidPtrStr(p.OnboardingSchemaID)
+	d.BillingSchemaID = uuidPtrStr(p.BillingSchemaID)
+	d.ServiceSchemaID = uuidPtrStr(p.ServiceSchemaID)
+	d.CommissionSchemaID = uuidPtrStr(p.CommissionSchemaID)
+	d.SuspensionSchemaID = uuidPtrStr(p.SuspensionSchemaID)
+	return d
 }
 
 type createProductRequest struct {
@@ -58,6 +79,35 @@ type createProductRequest struct {
 	SpeedMbps    int     `json:"speed_mbps"`
 	MonthlyPrice float64 `json:"monthly_price"`
 	OTCPrice     float64 `json:"otc_price"`
+	// Wave 77: optional schema slot assignment at create time.
+	OnboardingSchemaID string `json:"onboarding_schema_id,omitempty"`
+	BillingSchemaID    string `json:"billing_schema_id,omitempty"`
+	ServiceSchemaID    string `json:"service_schema_id,omitempty"`
+	CommissionSchemaID string `json:"commission_schema_id,omitempty"`
+	SuspensionSchemaID string `json:"suspension_schema_id,omitempty"`
+}
+
+// updateProductRequest — Wave 77 PATCH. Pointer-or-clear pattern lets
+// the FE distinguish "leave alone" (omit) vs "explicitly clear" (set
+// clear_*=true) vs "reassign" (set id).
+type updateProductRequest struct {
+	Name          *string  `json:"name,omitempty"`
+	SpeedMbps     *int     `json:"speed_mbps,omitempty"`
+	MonthlyPrice  *float64 `json:"monthly_price,omitempty"`
+	OTCPrice      *float64 `json:"otc_price,omitempty"`
+	TempWindowHrs *int     `json:"temp_activation_window_hours,omitempty"`
+	Active        *bool    `json:"active,omitempty"`
+
+	OnboardingSchemaID *string `json:"onboarding_schema_id,omitempty"`
+	ClearOnboarding    bool    `json:"clear_onboarding,omitempty"`
+	BillingSchemaID    *string `json:"billing_schema_id,omitempty"`
+	ClearBilling       bool    `json:"clear_billing,omitempty"`
+	ServiceSchemaID    *string `json:"service_schema_id,omitempty"`
+	ClearService       bool    `json:"clear_service,omitempty"`
+	CommissionSchemaID *string `json:"commission_schema_id,omitempty"`
+	ClearCommission    bool    `json:"clear_commission,omitempty"`
+	SuspensionSchemaID *string `json:"suspension_schema_id,omitempty"`
+	ClearSuspension    bool    `json:"clear_suspension,omitempty"`
 }
 
 // =====================================================================
@@ -68,6 +118,7 @@ type leadDTO struct {
 	ID                  string          `json:"id"`
 	LeadNumber          string          `json:"lead_number"`
 	Status              string          `json:"status"`
+	LeadType            string          `json:"lead_type"` // Wave 76 (TC-CRM-002)
 	FullName            string          `json:"full_name"`
 	Phone               string          `json:"phone"`
 	Email               string          `json:"email,omitempty"`
@@ -90,20 +141,30 @@ type leadDTO struct {
 	SalesID             *string         `json:"sales_id,omitempty"`
 	SalesName           string          `json:"sales_name,omitempty"`
 	Source              string          `json:"source"`
-	Notes               string          `json:"notes,omitempty"`
-	ConvertedCustomerID *string         `json:"converted_customer_id,omitempty"`
-	ConvertedOrderID    *string         `json:"converted_order_id,omitempty"`
-	ConvertedAt         *string         `json:"converted_at,omitempty"`
-	CreatedAt           string          `json:"created_at"`
-	Documents           []documentDTO   `json:"documents,omitempty"`
+	// Wave 76 (TC-CRM-007/008): referrer customer FK + the joined
+	// customer name so the UI can render "Budi Santoso" instead of
+	// the raw UUID (TC-CRM-010).
+	ReferrerCustomerID   *string `json:"referrer_customer_id,omitempty"`
+	ReferrerCustomerName string  `json:"referrer_customer_name,omitempty"`
+	Notes                string  `json:"notes,omitempty"`
+	ConvertedCustomerID  *string         `json:"converted_customer_id,omitempty"`
+	ConvertedOrderID     *string         `json:"converted_order_id,omitempty"`
+	ConvertedAt          *string         `json:"converted_at,omitempty"`
+	CreatedAt            string          `json:"created_at"`
+	Documents            []documentDTO   `json:"documents,omitempty"`
 }
 
 func toLeadDTO(lw port.LeadWithDocs) leadDTO {
 	l := lw.Lead
+	leadType := string(l.LeadType)
+	if leadType == "" {
+		leadType = string(domain.LeadTypeBroadband)
+	}
 	d := leadDTO{
 		ID:                l.ID.String(),
 		LeadNumber:        l.LeadNumber,
 		Status:            string(l.Status),
+		LeadType:          leadType,
 		FullName:          l.FullName,
 		Phone:             l.Phone,
 		Email:             l.Email,
@@ -121,7 +182,12 @@ func toLeadDTO(lw port.LeadWithDocs) leadDTO {
 		SalesName:         lw.SalesName,
 		Source:            string(l.Source),
 		Notes:             l.Notes,
-		CreatedAt:         l.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:         httpserver.FormatRFC3339(l.CreatedAt),
+	}
+	if l.ReferrerCustomerID != nil {
+		s := l.ReferrerCustomerID.String()
+		d.ReferrerCustomerID = &s
+		d.ReferrerCustomerName = lw.ReferrerName
 	}
 	if l.CoverageVerdict != nil {
 		v := string(*l.CoverageVerdict)
@@ -155,7 +221,7 @@ func toLeadDTO(lw port.LeadWithDocs) leadDTO {
 		d.ConvertedOrderID = &s
 	}
 	if l.ConvertedAt != nil {
-		s := l.ConvertedAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*l.ConvertedAt)
 		d.ConvertedAt = &s
 	}
 	for _, doc := range lw.Documents {
@@ -177,6 +243,9 @@ type createLeadRequest struct {
 	Source            string   `json:"source,omitempty"`
 	Notes             string   `json:"notes,omitempty"`
 	AcceptExcessCable bool     `json:"accept_excess_cable,omitempty"`
+	// Wave 76 additions.
+	LeadType           string `json:"lead_type,omitempty"`            // 'broadband' (default) | 'enterprise'
+	ReferrerCustomerID string `json:"referrer_customer_id,omitempty"` // required when source='referral'
 }
 
 type updateLeadRequest struct {
@@ -265,7 +334,7 @@ func toCustomerDTO(c domain.Customer) customerDTO {
 		GPSLat:         c.GPSLat,
 		GPSLng:         c.GPSLng,
 		Status:         string(c.Status),
-		CreatedAt:      c.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:      httpserver.FormatRFC3339(c.CreatedAt),
 	}
 	if c.BranchID != nil {
 		s := c.BranchID.String()
@@ -317,7 +386,7 @@ func toOrderDTO(o domain.Order) orderDTO {
 		AcceptExcessCable: o.AcceptExcessCable,
 		Status:            string(o.Status),
 		Notes:             o.Notes,
-		CreatedAt:         o.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:         httpserver.FormatRFC3339(o.CreatedAt),
 	}
 	if o.LeadID != nil {
 		s := o.LeadID.String()
@@ -369,7 +438,7 @@ func toSchemaDTO(s domain.OnboardingSchema) schemaDTO {
 		Notes:        s.Notes,
 		Documents:    s.Content.Documents,
 		ContentRaw:   raw,
-		CreatedAt:    s.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:    httpserver.FormatRFC3339(s.CreatedAt),
 	}
 }
 

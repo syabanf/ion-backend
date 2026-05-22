@@ -23,6 +23,36 @@ type CreateProductInput struct {
 	SpeedMbps    int
 	MonthlyPrice float64
 	OTCPrice     float64
+	// Wave 77 (TC-PRD-014/016/018/022): per-kind schema slot FKs.
+	// All optional; nil → resolver falls through to customer-type default.
+	OnboardingSchemaID  *uuid.UUID
+	BillingSchemaID     *uuid.UUID
+	ServiceSchemaID     *uuid.UUID
+	CommissionSchemaID  *uuid.UUID
+	SuspensionSchemaID  *uuid.UUID
+}
+
+// UpdateProductInput allows partial updates including schema slot
+// reassignment. Use the Clear*Schema flags to explicitly null a slot
+// (clearing falls the resolver back to the customer-type default).
+type UpdateProductInput struct {
+	ID                  uuid.UUID
+	Name                *string
+	SpeedMbps           *int
+	MonthlyPrice        *float64
+	OTCPrice            *float64
+	TempWindowHrs       *int
+	Active              *bool
+	OnboardingSchemaID  *uuid.UUID
+	ClearOnboarding     bool
+	BillingSchemaID     *uuid.UUID
+	ClearBilling        bool
+	ServiceSchemaID     *uuid.UUID
+	ClearService        bool
+	CommissionSchemaID  *uuid.UUID
+	ClearCommission     bool
+	SuspensionSchemaID  *uuid.UUID
+	ClearSuspension     bool
 }
 
 type ProductListFilter struct {
@@ -38,39 +68,43 @@ type ProductListFilter struct {
 // The usecase is responsible for running the coverage check and stamping
 // the snapshot/verdict onto the lead.
 type CreateLeadInput struct {
-	FullName          string
-	Phone             string
-	Email             string
-	NIK               string
-	Address           string
-	GPSLat            *float64
-	GPSLng            *float64
-	ProductID         *uuid.UUID
-	SalesID           *uuid.UUID
-	Source            string
-	Notes             string
-	AcceptExcessCable bool
-	CreatedBy         *uuid.UUID
+	FullName           string
+	Phone              string
+	Email              string
+	NIK                string
+	Address            string
+	GPSLat             *float64
+	GPSLng             *float64
+	ProductID          *uuid.UUID
+	SalesID            *uuid.UUID
+	Source             string
+	Notes              string
+	AcceptExcessCable  bool
+	CreatedBy          *uuid.UUID
+	// Wave 76 additions.
+	LeadType           string     // 'broadband' (default) | 'enterprise'
+	ReferrerCustomerID *uuid.UUID // required when Source = 'referral'
 }
 
 // UpdateLeadInput allows partial updates to a lead in flight.
 type UpdateLeadInput struct {
-	ID                uuid.UUID
-	FullName          *string
-	Phone             *string
-	Email             *string
-	NIK               *string
-	Address           *string
-	GPSLat            *float64
-	GPSLng            *float64
-	ClearGPS          bool
-	ProductID         *uuid.UUID
-	ClearProduct      bool
-	SalesID           *uuid.UUID
-	ClearSales        bool
-	Notes             *string
-	AcceptExcessCable *bool
-	Status            *domain.LeadStatus
+	ID                 uuid.UUID
+	FullName           *string
+	Phone              *string
+	Email              *string
+	NIK                *string
+	Address            *string
+	GPSLat             *float64
+	GPSLng             *float64
+	ClearGPS           bool
+	ProductID          *uuid.UUID
+	ClearProduct       bool
+	SalesID            *uuid.UUID
+	ClearSales         bool
+	Notes              *string
+	AcceptExcessCable  *bool
+	Status             *domain.LeadStatus
+	// Note: LeadType is immutable post-create per TC-CRM-003.
 }
 
 // LeadListFilter — server-side filtering.
@@ -85,13 +119,14 @@ type LeadListFilter struct {
 
 // LeadWithDocs is the rich shape used for detail views.
 type LeadWithDocs struct {
-	Lead        domain.Lead
-	ProductName string
-	ProductCode string
-	BranchName  string
-	BranchCode  string
-	SalesName   string
-	Documents   []domain.OrderDocument
+	Lead         domain.Lead
+	ProductName  string
+	ProductCode  string
+	BranchName   string
+	BranchCode   string
+	SalesName    string
+	ReferrerName string // Wave 76 (TC-CRM-010): joined from crm.customers
+	Documents    []domain.OrderDocument
 }
 
 // --- Conversion ---
@@ -210,6 +245,8 @@ type UseCase interface {
 	// Products
 	ListProducts(ctx context.Context, f ProductListFilter) ([]domain.Product, error)
 	CreateProduct(ctx context.Context, in CreateProductInput) (*domain.Product, error)
+	UpdateProduct(ctx context.Context, in UpdateProductInput) (*domain.Product, error)
+	GetProduct(ctx context.Context, id uuid.UUID) (*domain.Product, error)
 
 	// Leads
 	CreateLead(ctx context.Context, in CreateLeadInput) (*LeadWithDocs, error)

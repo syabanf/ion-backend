@@ -69,7 +69,10 @@ type SchemaStatus string
 
 const (
 	SchemaStatusDraft      SchemaStatus = "draft"
+	SchemaStatusSubmitted  SchemaStatus = "submitted" // Wave 79 — awaiting approver votes
+	SchemaStatusApproved   SchemaStatus = "approved"  // Wave 79 — all approvals in, ready to publish
 	SchemaStatusPublished  SchemaStatus = "published"
+	SchemaStatusRejected   SchemaStatus = "rejected" // Wave 79 — transient; auto-flips back to draft with reason
 	SchemaStatusSuperseded SchemaStatus = "superseded"
 )
 
@@ -92,10 +95,14 @@ type SchemaDefinition struct {
 	Status       SchemaStatus
 	PublishedAt  *time.Time
 	SupersededAt *time.Time
-	Notes        string
-	CreatedBy    *uuid.UUID
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// Wave 79 — approval workflow audit timestamps.
+	SubmittedAt     *time.Time
+	ApprovedAt      *time.Time
+	RejectionReason string
+	Notes           string
+	CreatedBy       *uuid.UUID
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // NewSchema constructs a draft schema. Validation enforces non-empty
@@ -143,9 +150,16 @@ func NewSchema(kind SchemaKind, code, name string, body json.RawMessage) (*Schem
 	}, nil
 }
 
-// Publish flips a draft to published and stamps PublishedAt.
+// PublishDirect bypasses the Wave 79 approval gate — used by the
+// usecase layer when no approvers are configured for the schema's
+// kind (back-compat path so seed scripts and CI keep working).
+//
+// Callers must own the "is approval required?" decision before
+// invoking. Production routes (HTTP handlers) should go through the
+// strict Publish() entrypoint and SubmitForApproval/Approve flow.
+//
 // Idempotent on already-published; rejects superseded.
-func (s *SchemaDefinition) Publish() error {
+func (s *SchemaDefinition) PublishDirect() error {
 	switch s.Status {
 	case SchemaStatusPublished:
 		return nil
@@ -158,6 +172,101 @@ func (s *SchemaDefinition) Publish() error {
 	now := time.Now().UTC()
 	s.Status = SchemaStatusPublished
 	s.PublishedAt = &now
+	s.UpdatedAt = now
+	return nil
+}
+
+// Publish flips an approved schema to published and stamps PublishedAt.
+//
+// Wave 79 (TC-SCH-008) gate: only `approved` schemas can be published.
+// The pre-Wave-79 contract (draft → published direct) lives in
+// PublishDirect; the usecase chooses between them based on whether
+// any approvers are configured for the kind.
+//
+// Idempotent on already-published; rejects superseded.
+func (s *SchemaDefinition) Publish() error {
+	switch s.Status {
+	case SchemaStatusPublished:
+		return nil
+	case SchemaStatusSuperseded:
+		return derrors.Conflict(
+			"schema.cannot_publish_superseded",
+			"a superseded schema cannot be re-published",
+		)
+	case SchemaStatusDraft, SchemaStatusSubmitted, SchemaStatusRejected:
+		// Wave 79 (TC-SCH-008): publish requires approval first.
+		return derrors.Conflict(
+			"schema.publish_requires_approval",
+			"schema must be approved before publishing — current status: "+string(s.Status),
+		)
+	}
+	now := time.Now().UTC()
+	s.Status = SchemaStatusPublished
+	s.PublishedAt = &now
+	s.UpdatedAt = now
+	return nil
+}
+
+// SubmitForApproval flips a draft to submitted, stamping SubmittedAt.
+// Wave 79 (TC-SCH-007). Caller (usecase layer) is responsible for
+// notifying the configured approvers — the domain just owns the state
+// transition.
+func (s *SchemaDefinition) SubmitForApproval() error {
+	if s.Status != SchemaStatusDraft {
+		return derrors.Conflict(
+			"schema.not_draft",
+			"only draft schemas can be submitted for approval — current: "+string(s.Status),
+		)
+	}
+	now := time.Now().UTC()
+	s.Status = SchemaStatusSubmitted
+	s.SubmittedAt = &now
+	s.UpdatedAt = now
+	return nil
+}
+
+// Approve flips submitted → approved. Caller checks the per-kind
+// approver quorum before invoking this. Wave 79 (TC-SCH-008).
+func (s *SchemaDefinition) Approve() error {
+	if s.Status != SchemaStatusSubmitted {
+		return derrors.Conflict(
+			"schema.not_submitted",
+			"only submitted schemas can be approved — current: "+string(s.Status),
+		)
+	}
+	now := time.Now().UTC()
+	s.Status = SchemaStatusApproved
+	s.ApprovedAt = &now
+	s.UpdatedAt = now
+	return nil
+}
+
+// Reject sends a submitted schema back to draft with the captured
+// reason. Wave 79 (TC-SCH-009): the rejection_reason is preserved on
+// the row so the schema builder UI can render it as a callout. Status
+// becomes "draft", not "rejected" — the rejected state in the DB
+// CHECK is a transient marker the usecase may use during atomic write
+// paths; from the caller's view a rejected schema is just a draft
+// with a reason.
+func (s *SchemaDefinition) Reject(reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return derrors.Validation(
+			"schema.reject_reason_required",
+			"a reason is required when rejecting a schema",
+		)
+	}
+	if s.Status != SchemaStatusSubmitted {
+		return derrors.Conflict(
+			"schema.not_submitted",
+			"only submitted schemas can be rejected — current: "+string(s.Status),
+		)
+	}
+	now := time.Now().UTC()
+	// Per TC-SCH-009: rejection flips back to draft so the operator
+	// can edit + resubmit. The reason is captured for the UI to surface.
+	s.Status = SchemaStatusDraft
+	s.RejectionReason = reason
 	s.UpdatedAt = now
 	return nil
 }

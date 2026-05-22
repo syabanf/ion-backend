@@ -116,7 +116,16 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Use(httpserver.RequireAuth(h.verifier))
 
 		r.With(httpserver.RequirePermission("crm.product.read")).Get("/products", h.listProducts)
+		r.With(httpserver.RequirePermission("crm.product.read")).Get("/products/{id}", h.getProduct)
 		r.With(httpserver.RequirePermission("crm.product.manage")).Post("/products", h.createProduct)
+		// Wave 77 (TC-PRD-014/016/018/022/024): PATCH for schema slot
+		// reassignment. The same `crm.product.manage` permission gates
+		// the route — TC-PRD-024's "approval workflow" requirement is
+		// the schema-publish workflow (Wave 79), not a separate gate
+		// per product update. The slot value still must point at a
+		// schema that's `published` (resolver-enforced) — this PATCH
+		// doesn't bypass that.
+		r.With(httpserver.RequirePermission("crm.product.manage")).Patch("/products/{id}", h.updateProduct)
 
 		r.With(httpserver.RequirePermission("crm.lead.read")).Get("/leads", h.listLeads)
 		r.With(httpserver.RequirePermission("crm.lead.read")).Get("/leads/{id}", h.getLead)
@@ -184,18 +193,125 @@ func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, err)
 		return
 	}
-	p, err := h.uc.CreateProduct(r.Context(), port.CreateProductInput{
+	in := port.CreateProductInput{
 		Code:         req.Code,
 		Name:         req.Name,
 		SpeedMbps:    req.SpeedMbps,
 		MonthlyPrice: req.MonthlyPrice,
 		OTCPrice:     req.OTCPrice,
-	})
+	}
+	// Wave 77: forward optional schema slot ids; validate UUID format.
+	parseSlot := func(s string, code string) (*uuid.UUID, error) {
+		if s == "" {
+			return nil, nil
+		}
+		id, err := uuid.Parse(s)
+		if err != nil {
+			return nil, errors.Validation("product."+code+"_invalid", code+" must be a uuid")
+		}
+		return &id, nil
+	}
+	for _, x := range []struct {
+		raw  string
+		code string
+		dst  **uuid.UUID
+	}{
+		{req.OnboardingSchemaID, "onboarding_schema_id", &in.OnboardingSchemaID},
+		{req.BillingSchemaID, "billing_schema_id", &in.BillingSchemaID},
+		{req.ServiceSchemaID, "service_schema_id", &in.ServiceSchemaID},
+		{req.CommissionSchemaID, "commission_schema_id", &in.CommissionSchemaID},
+		{req.SuspensionSchemaID, "suspension_schema_id", &in.SuspensionSchemaID},
+	} {
+		v, err := parseSlot(x.raw, x.code)
+		if err != nil {
+			httpserver.WriteError(w, err)
+			return
+		}
+		*x.dst = v
+	}
+	p, err := h.uc.CreateProduct(r.Context(), in)
 	if err != nil {
 		httpserver.WriteError(w, err)
 		return
 	}
 	httpserver.WriteJSON(w, http.StatusCreated, toProductDTO(*p))
+}
+
+// Wave 77 (TC-PRD-027): single-product GET for the product detail page.
+// Surfaces the 5 schema slot FKs so the UI can render the assignment.
+func (h *Handler) getProduct(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "product")
+	if !ok {
+		return
+	}
+	p, err := h.uc.GetProduct(r.Context(), id)
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	httpserver.WriteJSON(w, http.StatusOK, toProductDTO(*p))
+}
+
+// Wave 77 (TC-PRD-014/016/018/022/024): PATCH for partial product
+// updates, primarily for schema slot (re)assignment.
+func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "product")
+	if !ok {
+		return
+	}
+	var req updateProductRequest
+	if err := httpserver.DecodeJSON(r, &req); err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	in := port.UpdateProductInput{
+		ID:            id,
+		Name:          req.Name,
+		SpeedMbps:     req.SpeedMbps,
+		MonthlyPrice:  req.MonthlyPrice,
+		OTCPrice:      req.OTCPrice,
+		TempWindowHrs: req.TempWindowHrs,
+		Active:        req.Active,
+		ClearOnboarding:  req.ClearOnboarding,
+		ClearBilling:     req.ClearBilling,
+		ClearService:     req.ClearService,
+		ClearCommission:  req.ClearCommission,
+		ClearSuspension:  req.ClearSuspension,
+	}
+	parseSlot := func(s *string, code string) (*uuid.UUID, error) {
+		if s == nil || *s == "" {
+			return nil, nil
+		}
+		v, err := uuid.Parse(*s)
+		if err != nil {
+			return nil, errors.Validation("product."+code+"_invalid", code+" must be a uuid")
+		}
+		return &v, nil
+	}
+	for _, x := range []struct {
+		raw  *string
+		code string
+		dst  **uuid.UUID
+	}{
+		{req.OnboardingSchemaID, "onboarding_schema_id", &in.OnboardingSchemaID},
+		{req.BillingSchemaID, "billing_schema_id", &in.BillingSchemaID},
+		{req.ServiceSchemaID, "service_schema_id", &in.ServiceSchemaID},
+		{req.CommissionSchemaID, "commission_schema_id", &in.CommissionSchemaID},
+		{req.SuspensionSchemaID, "suspension_schema_id", &in.SuspensionSchemaID},
+	} {
+		v, err := parseSlot(x.raw, x.code)
+		if err != nil {
+			httpserver.WriteError(w, err)
+			return
+		}
+		*x.dst = v
+	}
+	p, err := h.uc.UpdateProduct(r.Context(), in)
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	httpserver.WriteJSON(w, http.StatusOK, toProductDTO(*p))
 }
 
 // =====================================================================
@@ -243,9 +359,8 @@ func (h *Handler) listLeads(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getLead(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("lead.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "lead")
+	if !ok {
 		return
 	}
 	lw, err := h.uc.GetLead(r.Context(), id)
@@ -274,6 +389,7 @@ func (h *Handler) createLead(w http.ResponseWriter, r *http.Request) {
 		Source:            req.Source,
 		Notes:             req.Notes,
 		AcceptExcessCable: req.AcceptExcessCable,
+		LeadType:          req.LeadType, // Wave 76
 	}
 	if req.ProductID != "" {
 		id, err := uuid.Parse(req.ProductID)
@@ -291,6 +407,16 @@ func (h *Handler) createLead(w http.ResponseWriter, r *http.Request) {
 		}
 		in.SalesID = &id
 	}
+	// Wave 76 (TC-CRM-007): referrer customer id when source=referral.
+	if req.ReferrerCustomerID != "" {
+		id, err := uuid.Parse(req.ReferrerCustomerID)
+		if err != nil {
+			httpserver.WriteError(w, errors.Validation("lead.referrer_invalid",
+				"referrer_customer_id is not a uuid"))
+			return
+		}
+		in.ReferrerCustomerID = &id
+	}
 	if c != nil {
 		uid := c.UserID
 		in.CreatedBy = &uid
@@ -304,9 +430,8 @@ func (h *Handler) createLead(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateLead(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("lead.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "lead")
+	if !ok {
 		return
 	}
 	var req updateLeadRequest
@@ -396,9 +521,8 @@ func (h *Handler) updateLead(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) convertLead(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("lead.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "lead")
+	if !ok {
 		return
 	}
 	c := httpserver.ClaimsFromContext(r.Context())
@@ -432,9 +556,8 @@ func (h *Handler) convertLead(w http.ResponseWriter, r *http.Request) {
 // =====================================================================
 
 func (h *Handler) updateDocument(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("doc.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "doc")
+	if !ok {
 		return
 	}
 	var req updateDocumentRequest
@@ -490,9 +613,8 @@ func (h *Handler) listCustomers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getCustomer(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("customer.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "customer")
+	if !ok {
 		return
 	}
 	c, err := h.uc.GetCustomer(r.Context(), id)
@@ -539,9 +661,8 @@ func (h *Handler) listOrders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getOrder(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("order.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "order")
+	if !ok {
 		return
 	}
 	o, err := h.uc.GetOrder(r.Context(), id)

@@ -50,6 +50,66 @@ type Customer struct {
 	Status             CustomerStatus
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+
+	// Wave 78 (TC-SCH-011/015/023/026, TC-PRD-025): version lock.
+	// At conversion the resolver snapshots the version it picked for
+	// each of the 5 kinds and pins them here. The resolver prefers
+	// these locked versions over `FindLatestPublished` on subsequent
+	// reads, so publishing a new schema version doesn't silently
+	// re-rate existing customers.
+	//
+	// All nullable so legacy customers (created before Wave 78) fall
+	// through to the existing resolver path until explicitly migrated.
+	LockedOnboardingSchemaVersionID  *uuid.UUID
+	LockedBillingSchemaVersionID     *uuid.UUID
+	LockedServiceSchemaVersionID     *uuid.UUID
+	LockedCommissionSchemaVersionID  *uuid.UUID
+	LockedSuspensionSchemaVersionID  *uuid.UUID
+}
+
+// LockedSchemaVersionID returns the FK column matching the given
+// schema kind (one of: onboarding, billing, service, commission,
+// suspension). Returns nil for unknown kinds or unlocked rows.
+//
+// Used by the resolver — see internal/platform/usecase.Service
+// — to short-circuit `FindLatestPublished` when a customer has
+// been pinned to a specific version.
+func (c *Customer) LockedSchemaVersionID(kind string) *uuid.UUID {
+	switch kind {
+	case "onboarding":
+		return c.LockedOnboardingSchemaVersionID
+	case "billing":
+		return c.LockedBillingSchemaVersionID
+	case "service":
+		return c.LockedServiceSchemaVersionID
+	case "commission":
+		return c.LockedCommissionSchemaVersionID
+	case "suspension":
+		return c.LockedSuspensionSchemaVersionID
+	}
+	return nil
+}
+
+// SetLockedSchemaVersion pins a specific schema version for this
+// customer + kind. Mirror of `Product.SetSchemaSlot` so the conversion
+// path can loop over `domain.SchemaSlots` without per-kind switches.
+func (c *Customer) SetLockedSchemaVersion(kind string, versionID *uuid.UUID) error {
+	switch kind {
+	case "onboarding":
+		c.LockedOnboardingSchemaVersionID = versionID
+	case "billing":
+		c.LockedBillingSchemaVersionID = versionID
+	case "service":
+		c.LockedServiceSchemaVersionID = versionID
+	case "commission":
+		c.LockedCommissionSchemaVersionID = versionID
+	case "suspension":
+		c.LockedSuspensionSchemaVersionID = versionID
+	default:
+		return errors.Validation("customer.schema_kind_invalid",
+			"schema kind '"+kind+"' must be one of: onboarding, billing, service, commission, suspension")
+	}
+	return nil
 }
 
 func GenerateCustomerNumber(t time.Time) string {

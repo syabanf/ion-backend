@@ -4,7 +4,6 @@ package http
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/ion-core/backend/internal/billing/port"
@@ -47,9 +46,8 @@ func (h *Handler) requestTermination(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) cancelTermination(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("termination.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "termination")
+	if !ok {
 		return
 	}
 	var req cancelTerminationRequest
@@ -103,9 +101,8 @@ func (h *Handler) listTerminations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getTermination(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("termination.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "termination")
+	if !ok {
 		return
 	}
 	t, err := h.uc.GetTerminationRequest(r.Context(), id)

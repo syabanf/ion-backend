@@ -257,9 +257,8 @@ func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("user.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "user")
+	if !ok {
 		return
 	}
 
@@ -318,9 +317,8 @@ func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getUserDetail(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("user.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "user")
+	if !ok {
 		return
 	}
 	d, err := h.uc.GetUserDetail(r.Context(), id)
@@ -345,9 +343,8 @@ func (h *Handler) getUserDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getUser(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("user.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "user")
+	if !ok {
 		return
 	}
 	u, err := h.uc.GetUser(r.Context(), id)
@@ -359,9 +356,8 @@ func (h *Handler) getUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) replaceUserRoles(w http.ResponseWriter, r *http.Request) {
-	userID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("user.id_invalid", "id is not a valid uuid"))
+	userID, ok := httpserver.ParseUUIDParam(w, r, "id", "user")
+	if !ok {
 		return
 	}
 	var req assignRolesRequest
@@ -402,9 +398,8 @@ func (h *Handler) listPermissions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) permissionsForRole(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("role.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "role")
+	if !ok {
 		return
 	}
 	perms, err := h.uc.PermissionsForRole(r.Context(), id)
@@ -416,9 +411,8 @@ func (h *Handler) permissionsForRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getRole(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("role.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "role")
+	if !ok {
 		return
 	}
 	role, err := h.uc.GetRole(r.Context(), id)
@@ -455,9 +449,8 @@ func (h *Handler) createRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateRole(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("role.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "role")
+	if !ok {
 		return
 	}
 	var req createRoleRequest
@@ -482,9 +475,8 @@ func (h *Handler) updateRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteRole(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("role.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "role")
+	if !ok {
 		return
 	}
 	if err := h.uc.DeleteRole(r.Context(), id); err != nil {
@@ -495,9 +487,8 @@ func (h *Handler) deleteRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) setRolePermissions(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("role.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "role")
+	if !ok {
 		return
 	}
 	var req setRolePermissionsRequest

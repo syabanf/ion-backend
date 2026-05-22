@@ -17,10 +17,9 @@
 package http
 
 import (
-	"time"
-
 	"github.com/ion-core/backend/internal/warehouse/domain"
 	"github.com/ion-core/backend/internal/warehouse/port"
+	"github.com/ion-core/backend/pkg/httpserver"
 )
 
 // =====================================================================
@@ -46,7 +45,7 @@ func toWarehouseDTO(it port.WarehouseListItem) warehouseDTO {
 		BranchName: it.BranchName, BranchCode: it.BranchCode,
 		Address: it.Warehouse.Address, Notes: it.Warehouse.Notes,
 		Active:    it.Warehouse.Active,
-		CreatedAt: it.Warehouse.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt: httpserver.FormatRFC3339(it.Warehouse.CreatedAt),
 	}
 	if it.Warehouse.BranchID != nil {
 		s := it.Warehouse.BranchID.String()
@@ -138,7 +137,7 @@ func toInventoryRowDTO(r port.InventoryRow) inventoryRowDTO {
 		MinThreshold: r.MinThreshold, BelowThreshold: r.BelowThreshold,
 	}
 	if r.LastMovementAt != nil {
-		s := r.LastMovementAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*r.LastMovementAt)
 		d.LastMovementAt = &s
 	}
 	return d
@@ -196,7 +195,7 @@ func toAssetDTO(a domain.Asset) assetDTO {
 		SerialNumber: a.SerialNumber, QRCode: a.QRCode, MACAddress: a.MACAddress,
 		Ownership: string(a.Ownership), Condition: string(a.Condition),
 		Status:           string(a.Status),
-		ReceivedAt:       a.ReceivedAt.UTC().Format(time.RFC3339),
+		ReceivedAt:       httpserver.FormatRFC3339(a.ReceivedAt),
 		PurchaseCost:     a.PurchaseCost,
 		Distributor:      a.Distributor,
 		PurchaseOrderRef: a.PurchaseOrderRef,
@@ -232,7 +231,7 @@ func toMovementDTO(m domain.StockMovement) movementDTO {
 		ID: m.ID.String(), WarehouseID: m.WarehouseID.String(), StockItemID: m.StockItemID.String(),
 		MovementType: string(m.MovementType), Quantity: m.Quantity,
 		Reason: m.Reason, ReferenceType: m.ReferenceType,
-		PerformedAt: m.PerformedAt.UTC().Format(time.RFC3339),
+		PerformedAt: httpserver.FormatRFC3339(m.PerformedAt),
 	}
 	if m.AssetID != nil {
 		s := m.AssetID.String()
@@ -280,15 +279,15 @@ func toTransferDTO(t domain.Transfer) transferDTO {
 		DestinationWarehouseID: t.DestinationWarehouseID.String(),
 		Status:                 string(t.Status),
 		Notes:                  t.Notes,
-		CreatedAt:              t.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:              httpserver.FormatRFC3339(t.CreatedAt),
 		Items:                  []transferItemDTO{},
 	}
 	if t.DispatchedAt != nil {
-		s := t.DispatchedAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*t.DispatchedAt)
 		d.DispatchedAt = &s
 	}
 	if t.ReceivedAt != nil {
-		s := t.ReceivedAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*t.ReceivedAt)
 		d.ReceivedAt = &s
 	}
 	for _, it := range t.Items {
@@ -416,7 +415,7 @@ func toOpnameDTO(v port.OpnameView) opnameSessionDTO {
 		WarehouseCode: v.WarehouseCode,
 		WarehouseName: v.WarehouseName,
 		Status:        string(s.Status),
-		StartedAt:     s.StartedAt.UTC().Format(time.RFC3339),
+		StartedAt:     httpserver.FormatRFC3339(s.StartedAt),
 		Notes:         s.Notes,
 	}
 	if s.StartedBy != nil {
@@ -424,11 +423,11 @@ func toOpnameDTO(v port.OpnameView) opnameSessionDTO {
 		d.StartedBy = &x
 	}
 	if s.CommittedAt != nil {
-		x := s.CommittedAt.UTC().Format(time.RFC3339)
+		x := httpserver.FormatRFC3339(*s.CommittedAt)
 		d.CommittedAt = &x
 	}
 	if s.CancelledAt != nil {
-		x := s.CancelledAt.UTC().Format(time.RFC3339)
+		x := httpserver.FormatRFC3339(*s.CancelledAt)
 		d.CancelledAt = &x
 	}
 	for _, cv := range v.Counts {
@@ -443,7 +442,7 @@ func toOpnameDTO(v port.OpnameView) opnameSessionDTO {
 			CountedQty:    cv.Count.CountedQty,
 			Variance:      cv.Count.Variance,
 			Notes:         cv.Count.Notes,
-			CountedAt:     cv.Count.CountedAt.UTC().Format(time.RFC3339),
+			CountedAt:     httpserver.FormatRFC3339(cv.Count.CountedAt),
 		}
 		if cv.Count.CableRemnantDecision != nil {
 			x := string(*cv.Count.CableRemnantDecision)

@@ -3,12 +3,8 @@ package http
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
-
 	"github.com/ion-core/backend/internal/warehouse/domain"
 	"github.com/ion-core/backend/internal/warehouse/port"
-	"github.com/ion-core/backend/pkg/errors"
 	"github.com/ion-core/backend/pkg/httpserver"
 )
 
@@ -124,9 +120,8 @@ func (h *Handler) listSuppliers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getSupplier(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("supplier.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "supplier")
+	if !ok {
 		return
 	}
 	s, err := h.uc.GetSupplier(r.Context(), id)
@@ -164,9 +159,8 @@ func (h *Handler) createSupplier(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateSupplier(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("supplier.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "supplier")
+	if !ok {
 		return
 	}
 	var req updateSupplierRequest

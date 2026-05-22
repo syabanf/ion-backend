@@ -17,10 +17,9 @@
 package http
 
 import (
-	"time"
-
 	"github.com/ion-core/backend/internal/billing/domain"
 	"github.com/ion-core/backend/internal/billing/port"
+	"github.com/ion-core/backend/pkg/httpserver"
 )
 
 // =====================================================================
@@ -81,14 +80,14 @@ func toInvoiceDTO(v port.InvoiceView) invoiceDTO {
 		OutstandingAmount: v.OutstandingAmount,
 		Status:            string(v.Invoice.Status),
 		Notes:             v.Invoice.Notes,
-		CreatedAt:         v.Invoice.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:         httpserver.FormatRFC3339(v.Invoice.CreatedAt),
 	}
 	if v.Invoice.OrderID != nil {
 		s := v.Invoice.OrderID.String()
 		d.OrderID = &s
 	}
 	if v.Invoice.PaidAt != nil {
-		s := v.Invoice.PaidAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*v.Invoice.PaidAt)
 		d.PaidAt = &s
 	}
 	for _, l := range v.Lines {
@@ -104,7 +103,7 @@ func toInvoiceDTO(v port.InvoiceView) invoiceDTO {
 			Amount:               p.Amount,
 			PaymentMethod:        p.PaymentMethod,
 			GatewayTransactionID: p.GatewayTransactionID,
-			PaymentDate:          p.PaymentDate.UTC().Format(time.RFC3339),
+			PaymentDate:          httpserver.FormatRFC3339(p.PaymentDate),
 			Status:               string(p.Status),
 			Notes:                p.Notes,
 		})
@@ -169,7 +168,7 @@ func toPolicyDTO(p *domain.Policy) policyDTO {
 		SuspendAfterDays:            p.SuspendAfterDays,
 		TerminateAfterSuspendedDays: p.TerminateAfterSuspendedDays,
 		NotifyCustomerDaysBefore:    p.NotifyCustomerDaysBefore,
-		UpdatedAt:                   p.UpdatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:                   httpserver.FormatRFC3339(p.UpdatedAt),
 	}
 }
 
@@ -206,7 +205,7 @@ func toCycleDTO(c domain.BillingCycle) cycleDTO {
 		PeriodEnd:   c.PeriodEnd.Format("2006-01-02"),
 		Status:      string(c.Status),
 		Notes:       c.Notes,
-		CreatedAt:   c.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:   httpserver.FormatRFC3339(c.CreatedAt),
 	}
 	if c.InvoiceID != nil {
 		s := c.InvoiceID.String()
@@ -259,7 +258,7 @@ func toCommissionDTO(c domain.CommissionRecord) commissionDTO {
 		Percentage: c.Percentage,
 		BaseAmount: c.BaseAmount,
 		Notes:      c.Notes,
-		CreatedAt:  c.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:  httpserver.FormatRFC3339(c.CreatedAt),
 	}
 	if c.UserID != nil {
 		s := c.UserID.String()
@@ -302,7 +301,7 @@ func toTerminationDTO(t *domain.TerminationRequest) terminationDTO {
 		Reason:               t.Reason,
 		PenaltyAmount:        t.PenaltyAmount,
 		OutstandingAtRequest: t.OutstandingAtRequest,
-		RequestedAt:          t.RequestedAt.UTC().Format(time.RFC3339),
+		RequestedAt:          httpserver.FormatRFC3339(t.RequestedAt),
 		Notes:                t.Notes,
 	}
 	if t.OrderID != nil {
@@ -322,7 +321,7 @@ func toTerminationDTO(t *domain.TerminationRequest) terminationDTO {
 		d.WOID = &s
 	}
 	if t.CompletedAt != nil {
-		s := t.CompletedAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*t.CompletedAt)
 		d.CompletedAt = &s
 	}
 	return d
@@ -363,7 +362,7 @@ func toRewardDTO(r domain.ReferralReward) rewardDTO {
 		Amount:            r.Amount,
 		Status:            string(r.Status),
 		Notes:             r.Notes,
-		CreatedAt:         r.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:         httpserver.FormatRFC3339(r.CreatedAt),
 	}
 	if r.ReferrerCustomerID != nil {
 		s := r.ReferrerCustomerID.String()
@@ -378,7 +377,7 @@ func toRewardDTO(r domain.ReferralReward) rewardDTO {
 		d.InvoiceID = &s
 	}
 	if r.PaidAt != nil {
-		s := r.PaidAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*r.PaidAt)
 		d.PaidAt = &s
 	}
 	return d

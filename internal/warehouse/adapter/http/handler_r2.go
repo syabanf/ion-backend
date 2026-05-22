@@ -4,7 +4,6 @@ package http
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -22,9 +21,8 @@ import (
 // =====================================================================
 
 func (h *Handler) setThreshold(w http.ResponseWriter, r *http.Request) {
-	whID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("warehouse.id_invalid", "id is not a valid uuid"))
+	whID, ok := httpserver.ParseUUIDParam(w, r, "id", "warehouse")
+	if !ok {
 		return
 	}
 	itemID, err := uuid.Parse(chi.URLParam(r, "itemId"))
@@ -111,9 +109,8 @@ func (h *Handler) listOpnameSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getOpnameSession(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("opname.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "opname")
+	if !ok {
 		return
 	}
 	v, err := h.uc.GetOpname(r.Context(), id)
@@ -153,9 +150,8 @@ func (h *Handler) startOpname(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) upsertOpnameCount(w http.ResponseWriter, r *http.Request) {
-	sessID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("opname.id_invalid", "id is not a valid uuid"))
+	sessID, ok := httpserver.ParseUUIDParam(w, r, "id", "opname")
+	if !ok {
 		return
 	}
 	var req upsertCountRequest
@@ -202,7 +198,7 @@ func (h *Handler) upsertOpnameCount(w http.ResponseWriter, r *http.Request) {
 		CountedQty:  out.CountedQty,
 		Variance:    out.Variance,
 		Notes:       out.Notes,
-		CountedAt:   out.CountedAt.UTC().Format(time.RFC3339),
+		CountedAt:   httpserver.FormatRFC3339(out.CountedAt),
 	}
 	if out.CableRemnantDecision != nil {
 		x := string(*out.CableRemnantDecision)
@@ -212,9 +208,8 @@ func (h *Handler) upsertOpnameCount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) commitOpname(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("opname.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "opname")
+	if !ok {
 		return
 	}
 	c := httpserver.ClaimsFromContext(r.Context())
@@ -231,9 +226,8 @@ func (h *Handler) commitOpname(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) cancelOpname(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("opname.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "opname")
+	if !ok {
 		return
 	}
 	c := httpserver.ClaimsFromContext(r.Context())

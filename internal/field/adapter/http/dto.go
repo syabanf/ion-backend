@@ -18,10 +18,10 @@ package http
 
 import (
 	"encoding/json"
-	"time"
 
 	"github.com/ion-core/backend/internal/field/domain"
 	"github.com/ion-core/backend/internal/field/port"
+	"github.com/ion-core/backend/pkg/httpserver"
 )
 
 // =====================================================================
@@ -71,7 +71,7 @@ func toWODTO(d port.WODetail) woDTO {
 		IsEmergency:        w.IsEmergency,
 		IsCrossArea:        w.IsCrossArea,
 		Notes:              w.Notes,
-		CreatedAt:          w.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:          httpserver.FormatRFC3339(w.CreatedAt),
 	}
 	if w.OrderID != nil {
 		s := w.OrderID.String()
@@ -82,11 +82,11 @@ func toWODTO(d port.WODetail) woDTO {
 		out.BranchID = &s
 	}
 	if w.ScheduledDate != nil {
-		s := w.ScheduledDate.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*w.ScheduledDate)
 		out.ScheduledDate = &s
 	}
 	if w.SLADueAt != nil {
-		s := w.SLADueAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*w.SLADueAt)
 		out.SLADueAt = &s
 	}
 	if w.TeamID != nil {
@@ -120,7 +120,7 @@ func toWODetailDTO(d port.WODetail) woDetailDTO {
 			TechnicianEmail: a.TechnicianEmail,
 			Grade:           string(a.Assignment.Grade),
 			WORole:          string(a.Assignment.WORole),
-			AssignedAt:      a.Assignment.AssignedAt.UTC().Format(time.RFC3339),
+			AssignedAt:      httpserver.FormatRFC3339(a.Assignment.AssignedAt),
 		})
 	}
 	for _, it := range d.ChecklistItems {
@@ -138,7 +138,7 @@ func toWODetailDTO(d port.WODetail) woDetailDTO {
 			ID: r.ID.String(), TemplateItemID: r.TemplateItemID.String(),
 			ResponseText: r.ResponseText, FileURL: r.FileURL,
 			GPSLat: r.GPSLat, GPSLng: r.GPSLng, GPSAccuracyM: r.GPSAccuracyM,
-			SubmittedAt: r.SubmittedAt.UTC().Format(time.RFC3339),
+			SubmittedAt: httpserver.FormatRFC3339(r.SubmittedAt),
 		})
 	}
 	for _, ri := range d.ResolutionItems {
@@ -147,7 +147,7 @@ func toWODetailDTO(d port.WODetail) woDetailDTO {
 			Category: string(ri.Category), Finding: ri.Finding,
 			ActionTaken: ri.ActionTaken, ResolutionStatus: string(ri.ResolutionStatus),
 			TimeSpentMinutes: ri.TimeSpentMinutes,
-			LoggedAt:         ri.LoggedAt.UTC().Format(time.RFC3339),
+			LoggedAt:         httpserver.FormatRFC3339(ri.LoggedAt),
 		})
 	}
 	if d.ActiveBAST != nil {
@@ -157,15 +157,15 @@ func toWODetailDTO(d port.WODetail) woDetailDTO {
 			SignOffMode:    string(b.SignOffMode),
 			CustomerSigURL: b.CustomerSigURL,
 			OTPUsed:        b.OTPUsed,
-			SignOffAt:      b.SignOffAt.UTC().Format(time.RFC3339),
+			SignOffAt:      httpserver.FormatRFC3339(b.SignOffAt),
 			SignOffGPSLat:  b.SignOffGPSLat,
 			SignOffGPSLng:  b.SignOffGPSLng,
-			SubmittedAt:    b.SubmittedAt.UTC().Format(time.RFC3339),
+			SubmittedAt:    httpserver.FormatRFC3339(b.SubmittedAt),
 			NOCStatus:      string(b.NOCStatus),
 			NOCNotes:       b.NOCNotes,
 		}
 		if b.NOCVerifiedAt != nil {
-			s := b.NOCVerifiedAt.UTC().Format(time.RFC3339)
+			s := httpserver.FormatRFC3339(*b.NOCVerifiedAt)
 			bd.NOCVerifiedAt = &s
 		}
 		if len(b.CompiledData) > 0 {
@@ -305,19 +305,19 @@ func toBASTDTO(b *domain.BAST) bastDTO {
 		CustomerSigURL:   b.CustomerSigURL,
 		OTPUsed:          b.OTPUsed,
 		OTPPlaintextOnce: b.OTPPlaintextOnce,
-		SignOffAt:        b.SignOffAt.UTC().Format(time.RFC3339),
+		SignOffAt:        httpserver.FormatRFC3339(b.SignOffAt),
 		SignOffGPSLat:    b.SignOffGPSLat,
 		SignOffGPSLng:    b.SignOffGPSLng,
-		SubmittedAt:      b.SubmittedAt.UTC().Format(time.RFC3339),
+		SubmittedAt:      httpserver.FormatRFC3339(b.SubmittedAt),
 		NOCStatus:        string(b.NOCStatus),
 		NOCNotes:         b.NOCNotes,
 	}
 	if b.OTPVerifiedAt != nil {
-		s := b.OTPVerifiedAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*b.OTPVerifiedAt)
 		bd.OTPVerifiedAt = &s
 	}
 	if b.NOCVerifiedAt != nil {
-		s := b.NOCVerifiedAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*b.NOCVerifiedAt)
 		bd.NOCVerifiedAt = &s
 	}
 	if len(b.CompiledData) > 0 {
@@ -428,14 +428,14 @@ func toRescheduleDTO(r domain.Reschedule) rescheduleDTO {
 		WOID:      r.WOID.String(),
 		Reason:    string(r.Reason),
 		Notes:     r.Notes,
-		CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt: httpserver.FormatRFC3339(r.CreatedAt),
 	}
 	if r.OriginalDate != nil {
-		s := r.OriginalDate.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*r.OriginalDate)
 		d.OriginalDate = &s
 	}
 	if r.NewDate != nil {
-		s := r.NewDate.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*r.NewDate)
 		d.NewDate = &s
 	}
 	if r.RescheduledBy != nil {

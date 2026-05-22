@@ -213,6 +213,11 @@ func (h *Phase2Handler) listLeadEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // listOverdueLeads — "no activity since N days" alert source.
+//
+// Wave 76 (TC-CRM-014): the default threshold is now read from
+// identity.platform_config (key=lead_overdue_days, seeded by 0049),
+// so admins can change it without a deploy. The ?days= query param
+// still overrides per-request for ad-hoc reporting.
 func (h *Phase2Handler) listOverdueLeads(w http.ResponseWriter, r *http.Request) {
 	claims := httpserver.ClaimsFromContext(r.Context())
 	if claims == nil {
@@ -221,7 +226,17 @@ func (h *Phase2Handler) listOverdueLeads(w http.ResponseWriter, r *http.Request)
 	}
 	mine := r.URL.Query().Get("mine") == "true"
 	daysStr := r.URL.Query().Get("days")
+	// Default falls back to the platform_config value, then to 7 if
+	// the row is missing (e.g. pre-migration environments).
 	days := 7
+	var cfgValue string
+	if err := h.pool.QueryRow(r.Context(),
+		`SELECT config_value FROM identity.platform_config WHERE config_key = 'lead_overdue_days'`,
+	).Scan(&cfgValue); err == nil {
+		if d, perr := strconv.Atoi(cfgValue); perr == nil && d > 0 && d < 365 {
+			days = d
+		}
+	}
 	if d, err := strconv.Atoi(daysStr); err == nil && d > 0 && d < 365 {
 		days = d
 	}

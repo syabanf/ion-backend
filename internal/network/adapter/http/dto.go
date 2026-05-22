@@ -17,10 +17,9 @@
 package http
 
 import (
-	"time"
-
 	"github.com/ion-core/backend/internal/network/domain"
 	"github.com/ion-core/backend/internal/network/port"
+	"github.com/ion-core/backend/pkg/httpserver"
 )
 
 // =====================================================================
@@ -123,8 +122,8 @@ func toNodeDTO(it port.NodeListItem) nodeDTO {
 		Status:          string(n.Status),
 		Metadata:        n.Metadata,
 		Active:          n.Active,
-		CreatedAt:       n.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:       n.UpdatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:       httpserver.FormatRFC3339(n.CreatedAt),
+		UpdatedAt:       httpserver.FormatRFC3339(n.UpdatedAt),
 	}
 	if n.ParentID != nil {
 		s := n.ParentID.String()
@@ -157,8 +156,8 @@ func toBareNodeDTO(n domain.Node) nodeDTO {
 		Status:          string(n.Status),
 		Metadata:        n.Metadata,
 		Active:          n.Active,
-		CreatedAt:       n.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:       n.UpdatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:       httpserver.FormatRFC3339(n.CreatedAt),
+		UpdatedAt:       httpserver.FormatRFC3339(n.UpdatedAt),
 	}
 	if n.ParentID != nil {
 		s := n.ParentID.String()
@@ -243,11 +242,11 @@ func toPortDTO(p domain.Port) portDTO {
 		d.ReservedFor = &s
 	}
 	if p.ReservedUntil != nil {
-		s := p.ReservedUntil.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*p.ReservedUntil)
 		d.ReservedUntil = &s
 	}
 	if p.ActivatedAt != nil {
-		s := p.ActivatedAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*p.ActivatedAt)
 		d.ActivatedAt = &s
 	}
 	return d

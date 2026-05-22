@@ -7,11 +7,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ion-core/backend/internal/platform/domain"
+	"github.com/ion-core/backend/pkg/httpserver"
 )
 
 // rfc3339 returns t in canonical RFC 3339 UTC.
 func rfc3339(t time.Time) string {
-	return t.UTC().Format(time.RFC3339)
+	return httpserver.FormatRFC3339(t)
 }
 
 func rfc3339Ptr(t *time.Time) *string {

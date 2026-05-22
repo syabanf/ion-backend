@@ -4,7 +4,6 @@ package http
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/ion-core/backend/pkg/errors"
@@ -17,9 +16,8 @@ import (
 // customer. Only available while the WO is `in_progress`; otherwise the
 // usecase returns 403. Password is deliberately omitted.
 func (h *Handler) getONTConfig(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo")
+	if !ok {
 		return
 	}
 	var caller uuid.UUID

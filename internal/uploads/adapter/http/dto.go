@@ -16,9 +16,8 @@
 package http
 
 import (
-	"time"
-
 	"github.com/ion-core/backend/internal/uploads/port"
+	"github.com/ion-core/backend/pkg/httpserver"
 )
 
 // =====================================================================
@@ -48,10 +47,10 @@ func toUploadResponseDTO(u *port.PhotoUpload) uploadResponse {
 		GPSLng:       u.GPSLng,
 		GPSAccuracyM: u.GPSAccuracyM,
 		SHA256:       u.SHA256,
-		UploadedAt:   u.UploadedAt.UTC().Format(time.RFC3339),
+		UploadedAt:   httpserver.FormatRFC3339(u.UploadedAt),
 	}
 	if u.TakenAt != nil {
-		s := u.TakenAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*u.TakenAt)
 		resp.TakenAt = &s
 	}
 	return resp

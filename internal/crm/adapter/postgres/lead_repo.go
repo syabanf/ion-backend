@@ -53,6 +53,10 @@ var _ port.LeadRepository = (*LeadRepository)(nil)
 // leadSelect returns the lead row joined with friendly names for product,
 // branch, and sales person. We pull all three as left joins so the lead row
 // always returns; null-name columns are coalesced empty to keep scans simple.
+// Wave 76 (TC-CRM-010): join crm.customers on referrer_customer_id so
+// the wire DTO can render the referrer's full name instead of the raw
+// UUID. The join is LEFT so leads without a referrer still scan; the
+// `referrer_name` column always returns (empty string when absent).
 const leadSelect = `
 SELECT l.id, l.lead_number, l.status,
        l.full_name, l.phone, COALESCE(l.email,''), l.nik_encrypted,
@@ -63,6 +67,9 @@ SELECT l.id, l.lead_number, l.status,
        l.converted_customer_id, l.converted_order_id, l.converted_at,
        l.onboarding_schema_id, COALESCE(l.sales_type_at_create,''),
        l.created_by, l.created_at, l.updated_at,
+       COALESCE(l.lead_type,'broadband') AS lead_type,
+       l.referrer_customer_id,
+       COALESCE(rc.full_name,'')  AS referrer_name,
        COALESCE(p.name,'')        AS product_name,
        COALESCE(p.code,'')        AS product_code,
        COALESCE(b.name,'')        AS branch_name,
@@ -72,6 +79,7 @@ FROM crm.leads l
 LEFT JOIN crm.products p          ON p.id = l.product_id
 LEFT JOIN identity.branches b     ON b.id = l.branch_id
 LEFT JOIN identity.users u        ON u.id = l.sales_id
+LEFT JOIN crm.customers rc        ON rc.id = l.referrer_customer_id
 `
 
 // Create inserts a lead and seeds its document checklist in one transaction.
@@ -97,6 +105,10 @@ func (r *LeadRepository) Create(ctx context.Context, l *domain.Lead, docs []doma
 	if sealErr != nil {
 		return sealErr
 	}
+	leadTypeVal := string(l.LeadType)
+	if leadTypeVal == "" {
+		leadTypeVal = string(domain.LeadTypeBroadband)
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO crm.leads (
 			id, lead_number, status,
@@ -106,6 +118,7 @@ func (r *LeadRepository) Create(ctx context.Context, l *domain.Lead, docs []doma
 			accept_excess_cable, nearest_node_id, cable_distance_m, excess_charge,
 			branch_id, product_id, sales_id, source, notes,
 			onboarding_schema_id, sales_type_at_create,
+			lead_type, referrer_customer_id,
 			created_by, created_at, updated_at
 		) VALUES (
 			$1,$2,$3,
@@ -115,7 +128,8 @@ func (r *LeadRepository) Create(ctx context.Context, l *domain.Lead, docs []doma
 			$13,$14,$15,$16,
 			$17,$18,$19,$20,$21,
 			$22,$23,
-			$24,$25,$25
+			$24,$25,
+			$26,$27,$27
 		)
 	`,
 		l.ID, l.LeadNumber, string(l.Status),
@@ -125,6 +139,7 @@ func (r *LeadRepository) Create(ctx context.Context, l *domain.Lead, docs []doma
 		l.AcceptExcessCable, l.NearestNodeID, l.CableDistanceM, l.ExcessCharge,
 		l.BranchID, l.ProductID, l.SalesID, string(l.Source), nullableString(l.Notes),
 		l.OnboardingSchemaID, nullableString(l.SalesTypeAtCreate),
+		leadTypeVal, l.ReferrerCustomerID,
 		l.CreatedBy, l.CreatedAt,
 	); err != nil {
 		return mapDBError(err, "lead.create", "create lead")
@@ -322,6 +337,7 @@ func (r *LeadRepository) scanLeadWithDocs(row pgx.Row) (*port.LeadWithDocs, erro
 		encNIK  []byte
 		out     port.LeadWithDocs
 	)
+	var leadTypeStr string
 	err := row.Scan(
 		&l.ID, &l.LeadNumber, &status,
 		&l.FullName, &l.Phone, &l.Email, &encNIK,
@@ -332,6 +348,8 @@ func (r *LeadRepository) scanLeadWithDocs(row pgx.Row) (*port.LeadWithDocs, erro
 		&l.ConvertedCustomerID, &l.ConvertedOrderID, &l.ConvertedAt,
 		&l.OnboardingSchemaID, &l.SalesTypeAtCreate,
 		&l.CreatedBy, &l.CreatedAt, &l.UpdatedAt,
+		&leadTypeStr, &l.ReferrerCustomerID,
+		&out.ReferrerName,
 		&out.ProductName, &out.ProductCode,
 		&out.BranchName, &out.BranchCode, &out.SalesName,
 	)
@@ -348,6 +366,7 @@ func (r *LeadRepository) scanLeadWithDocs(row pgx.Row) (*port.LeadWithDocs, erro
 	}
 	l.Status = domain.LeadStatus(status)
 	l.Source = domain.LeadSource(source)
+	l.LeadType = domain.LeadType(leadTypeStr)
 	if verdict != nil {
 		v := domain.CoverageVerdict(*verdict)
 		l.CoverageVerdict = &v

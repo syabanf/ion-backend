@@ -36,12 +36,19 @@ var _ port.CustomerRepository = (*CustomerRepository)(nil)
 
 // Round-3: migration 0018 dropped the plaintext `nik` column. Reads +
 // writes now go exclusively through `nik_encrypted`. A repo without a
-// sealer wired refuses to persist NIK rather than silently losing it.
+// Wave 78 (TC-SCH-011/015/023/026, TC-PRD-025): customerSelect reads
+// the 5 locked_*_schema_version_id columns. Nullable scans because
+// rows created before Wave 78 won't have any locks set.
 const customerSelect = `
 SELECT id, customer_number, customer_type, full_name, phone,
        COALESCE(email,''), nik_encrypted,
        address, gps_lat, gps_lng,
-       branch_id, installation_node_id, status, created_at, updated_at
+       branch_id, installation_node_id, status, created_at, updated_at,
+       locked_onboarding_schema_version_id,
+       locked_billing_schema_version_id,
+       locked_service_schema_version_id,
+       locked_commission_schema_version_id,
+       locked_suspension_schema_version_id
 FROM crm.customers
 `
 
@@ -54,13 +61,19 @@ func (r *CustomerRepository) Create(ctx context.Context, c *domain.Customer) err
 		INSERT INTO crm.customers (
 			id, customer_number, customer_type, full_name, phone, email, nik_encrypted,
 			address, gps_lat, gps_lng, branch_id, installation_node_id, status,
-			created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)
+			created_at, updated_at,
+			locked_onboarding_schema_version_id, locked_billing_schema_version_id,
+			locked_service_schema_version_id, locked_commission_schema_version_id,
+			locked_suspension_schema_version_id
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,$16,$17,$18,$19)
 	`,
 		c.ID, c.CustomerNumber, string(c.CustomerType), c.FullName, c.Phone,
 		nullableString(c.Email), encNIK,
 		c.Address, c.GPSLat, c.GPSLng,
 		c.BranchID, c.InstallationNodeID, string(c.Status), c.CreatedAt,
+		c.LockedOnboardingSchemaVersionID, c.LockedBillingSchemaVersionID,
+		c.LockedServiceSchemaVersionID, c.LockedCommissionSchemaVersionID,
+		c.LockedSuspensionSchemaVersionID,
 	)
 	return mapDBError(err, "customer.create", "create customer")
 }
@@ -132,7 +145,11 @@ func (r *CustomerRepository) scanCustomer(row pgx.Row) (*domain.Customer, error)
 	err := row.Scan(&c.ID, &c.CustomerNumber, &ctype, &c.FullName, &c.Phone,
 		&c.Email, &encNIK,
 		&c.Address, &c.GPSLat, &c.GPSLng,
-		&c.BranchID, &c.InstallationNodeID, &st, &c.CreatedAt, &c.UpdatedAt)
+		&c.BranchID, &c.InstallationNodeID, &st, &c.CreatedAt, &c.UpdatedAt,
+		// Wave 78 — schema version lock columns.
+		&c.LockedOnboardingSchemaVersionID, &c.LockedBillingSchemaVersionID,
+		&c.LockedServiceSchemaVersionID, &c.LockedCommissionSchemaVersionID,
+		&c.LockedSuspensionSchemaVersionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, derrors.NotFound("customer.not_found", "customer not found")
 	}

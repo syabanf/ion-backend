@@ -128,9 +128,8 @@ func (h *Handler) listWOs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getWO(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo")
+	if !ok {
 		return
 	}
 	d, err := h.uc.GetWO(r.Context(), id)
@@ -187,9 +186,8 @@ func (h *Handler) createWO(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) routeWO(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo")
+	if !ok {
 		return
 	}
 	var req routeRequest
@@ -214,9 +212,8 @@ func (h *Handler) routeWO(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) assignWO(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo")
+	if !ok {
 		return
 	}
 	var req assignRequest
@@ -268,9 +265,8 @@ func (h *Handler) assignWO(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) statusWO(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo")
+	if !ok {
 		return
 	}
 	var req statusRequest
@@ -296,9 +292,8 @@ func (h *Handler) statusWO(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) submitChecklist(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo")
+	if !ok {
 		return
 	}
 	var req checklistRequest
@@ -326,14 +321,13 @@ func (h *Handler) submitChecklist(w http.ResponseWriter, r *http.Request) {
 		ID: rsp.ID.String(), TemplateItemID: rsp.TemplateItemID.String(),
 		ResponseText: rsp.ResponseText, FileURL: rsp.FileURL,
 		GPSLat: rsp.GPSLat, GPSLng: rsp.GPSLng, GPSAccuracyM: rsp.GPSAccuracyM,
-		SubmittedAt: rsp.SubmittedAt.UTC().Format(time.RFC3339),
+		SubmittedAt: httpserver.FormatRFC3339(rsp.SubmittedAt),
 	})
 }
 
 func (h *Handler) addResolution(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo")
+	if !ok {
 		return
 	}
 	var req resolutionRequest
@@ -373,14 +367,13 @@ func (h *Handler) addResolution(w http.ResponseWriter, r *http.Request) {
 		ActionTaken:      out.ActionTaken,
 		ResolutionStatus: string(out.ResolutionStatus),
 		TimeSpentMinutes: out.TimeSpentMinutes,
-		LoggedAt:         out.LoggedAt.UTC().Format(time.RFC3339),
+		LoggedAt:         httpserver.FormatRFC3339(out.LoggedAt),
 	})
 }
 
 func (h *Handler) submitBAST(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo")
+	if !ok {
 		return
 	}
 	var req bastRequest
@@ -415,9 +408,8 @@ func (h *Handler) submitBAST(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) verifyBAST(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("bast.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "bast")
+	if !ok {
 		return
 	}
 	var req verifyBASTRequest
@@ -474,9 +466,8 @@ func (h *Handler) listTeams(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getTeam(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("team.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "team")
+	if !ok {
 		return
 	}
 	t, err := h.uc.GetTeam(r.Context(), id)
@@ -516,9 +507,8 @@ func (h *Handler) createTeam(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listTeamMembers(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("team.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "team")
+	if !ok {
 		return
 	}
 	out, err := h.uc.ListTeamMembers(r.Context(), id)
@@ -534,9 +524,8 @@ func (h *Handler) listTeamMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) addTeamMember(w http.ResponseWriter, r *http.Request) {
-	teamID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("team.id_invalid", "id is not a uuid"))
+	teamID, ok := httpserver.ParseUUIDParam(w, r, "id", "team")
+	if !ok {
 		return
 	}
 	var req addMemberRequest
@@ -563,4 +552,3 @@ func (h *Handler) addTeamMember(w http.ResponseWriter, r *http.Request) {
 	}
 	httpserver.WriteJSON(w, http.StatusCreated, toTeamMemberDTO(*v))
 }
-

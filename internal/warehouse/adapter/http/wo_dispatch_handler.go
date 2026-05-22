@@ -7,7 +7,6 @@ package http
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -80,22 +79,22 @@ type woDispatchItemDTO struct {
 }
 
 type woDispatchDTO struct {
-	ID            string              `json:"id"`
-	WOID          string              `json:"wo_id"`
-	WarehouseID   string              `json:"warehouse_id"`
-	DispatchedBy  *string             `json:"dispatched_by,omitempty"`
-	Status        string              `json:"status"`
-	PlannedAt     string              `json:"planned_at"`
-	StagedAt      *string             `json:"staged_at,omitempty"`
-	PickedUpAt    *string             `json:"picked_up_at,omitempty"`
-	ReturnedAt    *string             `json:"returned_at,omitempty"`
-	CancelledAt   *string             `json:"cancelled_at,omitempty"`
-	CancelReason  string              `json:"cancel_reason,omitempty"`
-	Notes         string              `json:"notes,omitempty"`
-	Revision      int                 `json:"revision"`
-	CreatedAt     string              `json:"created_at"`
-	UpdatedAt     string              `json:"updated_at"`
-	Items         []woDispatchItemDTO `json:"items"`
+	ID           string              `json:"id"`
+	WOID         string              `json:"wo_id"`
+	WarehouseID  string              `json:"warehouse_id"`
+	DispatchedBy *string             `json:"dispatched_by,omitempty"`
+	Status       string              `json:"status"`
+	PlannedAt    string              `json:"planned_at"`
+	StagedAt     *string             `json:"staged_at,omitempty"`
+	PickedUpAt   *string             `json:"picked_up_at,omitempty"`
+	ReturnedAt   *string             `json:"returned_at,omitempty"`
+	CancelledAt  *string             `json:"cancelled_at,omitempty"`
+	CancelReason string              `json:"cancel_reason,omitempty"`
+	Notes        string              `json:"notes,omitempty"`
+	Revision     int                 `json:"revision"`
+	CreatedAt    string              `json:"created_at"`
+	UpdatedAt    string              `json:"updated_at"`
+	Items        []woDispatchItemDTO `json:"items"`
 }
 
 func toWODispatchItemDTO(it domain.WODispatchItem) woDispatchItemDTO {
@@ -110,7 +109,7 @@ func toWODispatchItemDTO(it domain.WODispatchItem) woDispatchItemDTO {
 		Notes:       it.Notes,
 	}
 	if it.PickedAt != nil {
-		s := it.PickedAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*it.PickedAt)
 		d.PickedAt = &s
 	}
 	if it.PickedBy != nil {
@@ -126,12 +125,12 @@ func toWODispatchDTO(d domain.WODispatch) woDispatchDTO {
 		WOID:         d.WOID.String(),
 		WarehouseID:  d.WarehouseID.String(),
 		Status:       string(d.Status),
-		PlannedAt:    d.PlannedAt.UTC().Format(time.RFC3339),
+		PlannedAt:    httpserver.FormatRFC3339(d.PlannedAt),
 		CancelReason: d.CancelReason,
 		Notes:        d.Notes,
 		Revision:     d.Revision,
-		CreatedAt:    d.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:    d.UpdatedAt.UTC().Format(time.RFC3339),
+		CreatedAt:    httpserver.FormatRFC3339(d.CreatedAt),
+		UpdatedAt:    httpserver.FormatRFC3339(d.UpdatedAt),
 		Items:        []woDispatchItemDTO{},
 	}
 	if d.DispatchedBy != nil {
@@ -139,19 +138,19 @@ func toWODispatchDTO(d domain.WODispatch) woDispatchDTO {
 		out.DispatchedBy = &s
 	}
 	if d.StagedAt != nil {
-		s := d.StagedAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*d.StagedAt)
 		out.StagedAt = &s
 	}
 	if d.PickedUpAt != nil {
-		s := d.PickedUpAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*d.PickedUpAt)
 		out.PickedUpAt = &s
 	}
 	if d.ReturnedAt != nil {
-		s := d.ReturnedAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*d.ReturnedAt)
 		out.ReturnedAt = &s
 	}
 	if d.CancelledAt != nil {
-		s := d.CancelledAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*d.CancelledAt)
 		out.CancelledAt = &s
 	}
 	for _, it := range d.Items {
@@ -222,9 +221,8 @@ func (h *Handler) listDispatches(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getDispatch(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo_dispatch.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo_dispatch")
+	if !ok {
 		return
 	}
 	d, err := h.woDispatch.GetDispatch(r.Context(), id)
@@ -293,9 +291,8 @@ func (h *Handler) markDispatchPickedUp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) cancelDispatch(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo_dispatch.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo_dispatch")
+	if !ok {
 		return
 	}
 	var req cancelDispatchRequest
@@ -315,9 +312,8 @@ func (h *Handler) cancelDispatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) scanDispatchItem(w http.ResponseWriter, r *http.Request) {
-	itemID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo_dispatch_item.id_invalid", "id is not a valid uuid"))
+	itemID, ok := httpserver.ParseUUIDParam(w, r, "id", "wo_dispatch_item")
+	if !ok {
 		return
 	}
 	var req scanItemRequest
@@ -339,9 +335,8 @@ func (h *Handler) scanDispatchItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) returnDispatchItem(w http.ResponseWriter, r *http.Request) {
-	itemID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo_dispatch_item.id_invalid", "id is not a valid uuid"))
+	itemID, ok := httpserver.ParseUUIDParam(w, r, "id", "wo_dispatch_item")
+	if !ok {
 		return
 	}
 	var req returnItemRequest
@@ -367,9 +362,8 @@ func (h *Handler) dispatchSimpleTransition(
 	w http.ResponseWriter, r *http.Request,
 	fn func(ctx, id, by uuid.UUID) (*domain.WODispatch, error),
 ) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("wo_dispatch.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "wo_dispatch")
+	if !ok {
 		return
 	}
 	c := httpserver.ClaimsFromContext(r.Context())

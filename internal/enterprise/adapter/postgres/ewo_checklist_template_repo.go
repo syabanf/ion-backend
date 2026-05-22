@@ -11,6 +11,7 @@ import (
 
 	"github.com/ion-core/backend/internal/enterprise/port"
 	derrors "github.com/ion-core/backend/pkg/errors"
+	"github.com/ion-core/backend/pkg/httpserver"
 )
 
 type EWOChecklistTemplateRepository struct {
@@ -131,7 +132,7 @@ func scanEWOChecklistTemplate(row pgx.Row) (port.EWOChecklistTemplate, error) {
 	if err != nil {
 		return port.EWOChecklistTemplate{}, derrors.Wrap(derrors.KindInternal, "db.ewo_template_scan", "scan", err)
 	}
-	t.CreatedAt = ca.UTC().Format(time.RFC3339)
-	t.UpdatedAt = ua.UTC().Format(time.RFC3339)
+	t.CreatedAt = httpserver.FormatRFC3339(ca)
+	t.UpdatedAt = httpserver.FormatRFC3339(ua)
 	return t, nil
 }

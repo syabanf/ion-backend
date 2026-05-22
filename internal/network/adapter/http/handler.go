@@ -118,9 +118,8 @@ func (h *Handler) createNodeType(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateNodeType(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("node_type.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "node_type")
+	if !ok {
 		return
 	}
 	var req updateNodeTypeRequest
@@ -195,9 +194,8 @@ func (h *Handler) listNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getNode(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("node.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "node")
+	if !ok {
 		return
 	}
 	it, err := h.uc.GetNode(r.Context(), id)
@@ -265,9 +263,8 @@ func (h *Handler) createNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("node.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "node")
+	if !ok {
 		return
 	}
 	var req updateNodeRequest
@@ -324,9 +321,8 @@ func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request) {
 // =====================================================================
 
 func (h *Handler) listPorts(w http.ResponseWriter, r *http.Request) {
-	nodeID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("node.id_invalid", "id is not a valid uuid"))
+	nodeID, ok := httpserver.ParseUUIDParam(w, r, "id", "node")
+	if !ok {
 		return
 	}
 	out, err := h.uc.ListPortsForNode(r.Context(), nodeID)
@@ -342,9 +338,8 @@ func (h *Handler) listPorts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) reservePort(w http.ResponseWriter, r *http.Request) {
-	portID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("port.id_invalid", "id is not a valid uuid"))
+	portID, ok := httpserver.ParseUUIDParam(w, r, "id", "port")
+	if !ok {
 		return
 	}
 	var req reservePortRequest
@@ -366,9 +361,8 @@ func (h *Handler) reservePort(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) activatePort(w http.ResponseWriter, r *http.Request) {
-	portID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("port.id_invalid", "id is not a valid uuid"))
+	portID, ok := httpserver.ParseUUIDParam(w, r, "id", "port")
+	if !ok {
 		return
 	}
 	var req activatePortRequest
@@ -390,9 +384,8 @@ func (h *Handler) activatePort(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) releasePort(w http.ResponseWriter, r *http.Request) {
-	portID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("port.id_invalid", "id is not a valid uuid"))
+	portID, ok := httpserver.ParseUUIDParam(w, r, "id", "port")
+	if !ok {
 		return
 	}
 	p, err := h.uc.ReleasePort(r.Context(), portID)

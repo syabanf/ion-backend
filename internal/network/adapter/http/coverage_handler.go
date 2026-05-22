@@ -85,9 +85,8 @@ func (h *Handler) coverageCheck(w http.ResponseWriter, r *http.Request) {
 // =====================================================================
 
 func (h *Handler) getPolygon(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("node.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "node")
+	if !ok {
 		return
 	}
 	poly, err := h.uc.GetNodePolygon(r.Context(), id)
@@ -103,9 +102,8 @@ func (h *Handler) getPolygon(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) savePolygon(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("node.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "node")
+	if !ok {
 		return
 	}
 	var req savePolygonRequest
@@ -124,9 +122,8 @@ func (h *Handler) savePolygon(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) clearPolygon(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("node.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "node")
+	if !ok {
 		return
 	}
 	if err := h.uc.ClearNodePolygon(r.Context(), id); err != nil {
@@ -214,9 +211,8 @@ func readUploadBody(r *http.Request) ([]byte, error) {
 // =====================================================================
 
 func (h *Handler) impact(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("node.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "node")
+	if !ok {
 		return
 	}
 	res, err := h.uc.DownstreamImpact(r.Context(), id)

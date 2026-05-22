@@ -132,9 +132,8 @@ func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deactivateUser(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("user.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "user")
+	if !ok {
 		return
 	}
 	if err := h.uc.SetUserActive(r.Context(), id, false); err != nil {
@@ -145,9 +144,8 @@ func (h *Handler) deactivateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) activateUser(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("user.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "user")
+	if !ok {
 		return
 	}
 	if err := h.uc.SetUserActive(r.Context(), id, true); err != nil {
@@ -206,9 +204,8 @@ func (h *Handler) createBranch(w http.ResponseWriter, r *http.Request) {
 // editor. We read directly off the pool to avoid bloating the
 // branch domain entity (which models only the "always-on" fields).
 func (h *Handler) getBranchConfig(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("branch.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "branch")
+	if !ok {
 		return
 	}
 	cfg, err := h.uc.GetBranchConfig(r.Context(), id)
@@ -229,9 +226,8 @@ func (h *Handler) getBranchConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateBranch(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("branch.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "branch")
+	if !ok {
 		return
 	}
 	var req updateBranchRequest
@@ -334,7 +330,7 @@ func (h *Handler) listPlatformConfig(w http.ResponseWriter, r *http.Request) {
 			Key:       c.Key,
 			Value:     c.Value,
 			UpdatedBy: ub,
-			UpdatedAt: c.UpdatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt: httpserver.FormatRFC3339(c.UpdatedAt),
 		})
 	}
 	httpserver.WriteJSON(w, http.StatusOK, map[string]any{"items": out})
@@ -366,4 +362,3 @@ func (h *Handler) updatePlatformConfig(w http.ResponseWriter, r *http.Request) {
 // =====================================================================
 // helpers
 // =====================================================================
-

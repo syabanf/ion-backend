@@ -81,12 +81,79 @@ func (s *Service) ListProducts(ctx context.Context, f port.ProductListFilter) ([
 	return s.products.List(ctx, f)
 }
 
+// GetProduct returns a single product by id. Wave 77.
+func (s *Service) GetProduct(ctx context.Context, id uuid.UUID) (*domain.Product, error) {
+	return s.products.FindByID(ctx, id)
+}
+
 func (s *Service) CreateProduct(ctx context.Context, in port.CreateProductInput) (*domain.Product, error) {
 	p, err := domain.NewProduct(in.Code, in.Name, in.SpeedMbps, in.MonthlyPrice, in.OTCPrice)
 	if err != nil {
 		return nil, err
 	}
+	// Wave 77 (TC-PRD-014/016/018/022): copy optional schema slots.
+	p.OnboardingSchemaID = in.OnboardingSchemaID
+	p.BillingSchemaID = in.BillingSchemaID
+	p.ServiceSchemaID = in.ServiceSchemaID
+	p.CommissionSchemaID = in.CommissionSchemaID
+	p.SuspensionSchemaID = in.SuspensionSchemaID
 	if err := s.products.Create(ctx, p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// UpdateProduct applies a partial patch including schema slot
+// (re)assignment. Wave 77 (TC-PRD-014/016/018/022/024).
+//
+// Mutation rules:
+//   - Non-nil pointer field → apply.
+//   - Clear*Schema=true → null the corresponding slot.
+//   - Both set is ambiguous; ClearX wins so the caller gets predictable
+//     behavior when serializing partial updates from a UI.
+//
+// The resolver (`internal/platform/usecase.ResolveForCustomer`) treats
+// a null slot as "use customer-type default" — clearing a slot is
+// equivalent to "let the global default re-emerge".
+func (s *Service) UpdateProduct(ctx context.Context, in port.UpdateProductInput) (*domain.Product, error) {
+	p, err := s.products.FindByID(ctx, in.ID)
+	if err != nil {
+		return nil, err
+	}
+	if in.Name != nil {
+		p.Name = *in.Name
+	}
+	if in.SpeedMbps != nil {
+		p.SpeedMbps = *in.SpeedMbps
+	}
+	if in.MonthlyPrice != nil {
+		p.MonthlyPrice = *in.MonthlyPrice
+	}
+	if in.OTCPrice != nil {
+		p.OTCPrice = *in.OTCPrice
+	}
+	if in.TempWindowHrs != nil {
+		p.TempActivationWindowHrs = *in.TempWindowHrs
+	}
+	if in.Active != nil {
+		p.Active = *in.Active
+	}
+	applySlot := func(clear bool, ptr *uuid.UUID, current **uuid.UUID) {
+		if clear {
+			*current = nil
+			return
+		}
+		if ptr != nil {
+			id := *ptr
+			*current = &id
+		}
+	}
+	applySlot(in.ClearOnboarding, in.OnboardingSchemaID, &p.OnboardingSchemaID)
+	applySlot(in.ClearBilling, in.BillingSchemaID, &p.BillingSchemaID)
+	applySlot(in.ClearService, in.ServiceSchemaID, &p.ServiceSchemaID)
+	applySlot(in.ClearCommission, in.CommissionSchemaID, &p.CommissionSchemaID)
+	applySlot(in.ClearSuspension, in.SuspensionSchemaID, &p.SuspensionSchemaID)
+	if err := s.products.Update(ctx, p); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -116,8 +183,49 @@ func (s *Service) CreateLead(ctx context.Context, in port.CreateLeadInput) (*por
 	l.SalesID = in.SalesID
 	l.Notes = in.Notes
 	l.CreatedBy = in.CreatedBy
+	// Wave 76 (TC-CRM-002): capture lead_type. Default broadband per
+	// NewLead constructor; only override if caller explicitly set it.
+	if in.LeadType != "" {
+		lt := domain.LeadType(in.LeadType)
+		if lt != domain.LeadTypeBroadband && lt != domain.LeadTypeEnterprise {
+			return nil, derrors.Validation("lead.lead_type_invalid",
+				"lead_type must be 'broadband' or 'enterprise'")
+		}
+		l.LeadType = lt
+	}
 	if in.Source != "" {
-		l.Source = domain.LeadSource(in.Source)
+		src := domain.LeadSource(in.Source)
+		if !domain.IsValidLeadSource(src) {
+			return nil, derrors.Validation("lead.source_invalid",
+				"source '"+in.Source+"' is not a valid lead source")
+		}
+		l.Source = src
+	}
+	// Wave 76 (TC-CRM-007/008): when source=referral, referrer must
+	// point to an active customer. Reject suspended, terminated,
+	// pending_install, archived, etc. — anyone whose status isn't
+	// 'active' was the prior-QA landmine.
+	if l.Source == domain.LeadSourceReferral {
+		if in.ReferrerCustomerID == nil {
+			return nil, derrors.Validation("lead.referrer_required",
+				"referrer_customer_id is required when source=referral")
+		}
+		if s.customers != nil {
+			ref, err := s.customers.FindByID(ctx, *in.ReferrerCustomerID)
+			if err != nil {
+				return nil, derrors.Validation("lead.referrer_not_found",
+					"referrer customer not found")
+			}
+			if ref.Status != "active" {
+				return nil, derrors.Validation("lead.referrer_inactive",
+					"referrer customer must be active — current status is "+string(ref.Status))
+			}
+		}
+		l.ReferrerCustomerID = in.ReferrerCustomerID
+	} else if in.ReferrerCustomerID != nil {
+		// Tolerate but don't error — useful for cs_referral flows that
+		// also want to record an existing-customer link.
+		l.ReferrerCustomerID = in.ReferrerCustomerID
 	}
 	l.AcceptExcessCable = in.AcceptExcessCable
 
@@ -232,12 +340,9 @@ func (s *Service) UpdateLead(ctx context.Context, in port.UpdateLeadInput) (*por
 	}
 	if in.AcceptExcessCable != nil {
 		l.AcceptExcessCable = *in.AcceptExcessCable
-		// If the lead was already 'potential' (excess accepted) and sales
-		// rescinds accept, revert to 'qualified' only if the verdict is
-		// 'covered'; otherwise drop to 'new' so the gate behaves sensibly.
-		if !*in.AcceptExcessCable && l.Status == domain.LeadStatusPotential {
-			l.Status = domain.LeadStatusNew
-		}
+		// Wave 75 (QA TC-CRM-013): we no longer mutate Status from
+		// AcceptExcessCable changes. Status is rep-driven; the flag
+		// is captured for downstream invoice/order generation.
 	}
 	if in.Status != nil {
 		// PRD §6.3 line 1448 ("Lost/closed reason tagging"): when a
@@ -259,6 +364,14 @@ func (s *Service) UpdateLead(ctx context.Context, in port.UpdateLeadInput) (*por
 					"a reason is required when marking a lead as lost — fill the notes field",
 				)
 			}
+		}
+		// Wave 75 (QA TC-CRM-013/023): enforce forward-only pipeline.
+		// The old code accepted any status mutation — hot→new and
+		// even converted→new both passed, which QA correctly flagged
+		// as regression-prone (you could "un-convert" a customer).
+		// Now every transition is gated through `CanTransitionTo`.
+		if err := l.CanTransitionTo(*in.Status); err != nil {
+			return nil, err
 		}
 		l.Status = *in.Status
 	}

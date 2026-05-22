@@ -15,7 +15,7 @@ import (
 // using zero-value timestamps in the wire format — pointer-nil
 // becomes JSON null instead.
 func rfc3339(t time.Time) string {
-	return t.UTC().Format(time.RFC3339)
+	return httpserver.FormatRFC3339(t)
 }
 
 func rfc3339Ptr(t *time.Time) *string {
@@ -202,40 +202,40 @@ type updatePricebookLineRequest struct {
 // =====================================================================
 
 type opportunityDTO struct {
-	ID                  string  `json:"id"`
-	OpportunityNumber   string  `json:"opportunity_number"`
-	CustomerID          *string `json:"customer_id,omitempty"`
-	AccountName         string  `json:"account_name"`
-	AccountIndustry     string  `json:"account_industry"`
-	AccountSize         string  `json:"account_size"`
-	PICName             string  `json:"pic_name"`
-	PICTitle            string  `json:"pic_title"`
-	PICPhone            string  `json:"pic_phone"`
-	PICEmail            string  `json:"pic_email"`
-	OwnerUserID         *string `json:"owner_user_id,omitempty"`
-	BranchID            *string `json:"branch_id,omitempty"`
-	Stage               string  `json:"stage"`
-	Substage            string  `json:"substage"`
-	EstimatedValue      float64 `json:"estimated_value"`
-	Currency            string  `json:"currency"`
-	ExpectedCloseAt     *string `json:"expected_close_at,omitempty"`
-	PricebookID         *string `json:"pricebook_id,omitempty"`
-	Source              string  `json:"source"`
-	ReferrerCustomerID  *string `json:"referrer_customer_id,omitempty"`
+	ID                 string  `json:"id"`
+	OpportunityNumber  string  `json:"opportunity_number"`
+	CustomerID         *string `json:"customer_id,omitempty"`
+	AccountName        string  `json:"account_name"`
+	AccountIndustry    string  `json:"account_industry"`
+	AccountSize        string  `json:"account_size"`
+	PICName            string  `json:"pic_name"`
+	PICTitle           string  `json:"pic_title"`
+	PICPhone           string  `json:"pic_phone"`
+	PICEmail           string  `json:"pic_email"`
+	OwnerUserID        *string `json:"owner_user_id,omitempty"`
+	BranchID           *string `json:"branch_id,omitempty"`
+	Stage              string  `json:"stage"`
+	Substage           string  `json:"substage"`
+	EstimatedValue     float64 `json:"estimated_value"`
+	Currency           string  `json:"currency"`
+	ExpectedCloseAt    *string `json:"expected_close_at,omitempty"`
+	PricebookID        *string `json:"pricebook_id,omitempty"`
+	Source             string  `json:"source"`
+	ReferrerCustomerID *string `json:"referrer_customer_id,omitempty"`
 	// Pre-BOQ snapshot — raw JSON pass-through (TC-OP-005).
-	PreBOQ              json.RawMessage `json:"pre_boq"`
-	PreBOQCompletedAt   *string         `json:"pre_boq_completed_at,omitempty"`
-	StageEnteredAt      string          `json:"stage_entered_at"`
-	LastActivityAt      string          `json:"last_activity_at"`
-	LostReasonCode      string          `json:"lost_reason_code,omitempty"`
-	LostReason          string          `json:"lost_reason,omitempty"`
-	AutoLost            bool            `json:"auto_lost"`
-	WonAt               *string         `json:"won_at,omitempty"`
-	POReference         string          `json:"po_reference,omitempty"`
-	Notes               string          `json:"notes"`
-	Revision            int             `json:"revision"`
-	CreatedAt           string          `json:"created_at"`
-	UpdatedAt           string          `json:"updated_at"`
+	PreBOQ            json.RawMessage `json:"pre_boq"`
+	PreBOQCompletedAt *string         `json:"pre_boq_completed_at,omitempty"`
+	StageEnteredAt    string          `json:"stage_entered_at"`
+	LastActivityAt    string          `json:"last_activity_at"`
+	LostReasonCode    string          `json:"lost_reason_code,omitempty"`
+	LostReason        string          `json:"lost_reason,omitempty"`
+	AutoLost          bool            `json:"auto_lost"`
+	WonAt             *string         `json:"won_at,omitempty"`
+	POReference       string          `json:"po_reference,omitempty"`
+	Notes             string          `json:"notes"`
+	Revision          int             `json:"revision"`
+	CreatedAt         string          `json:"created_at"`
+	UpdatedAt         string          `json:"updated_at"`
 }
 
 func toOpportunityDTO(o domain.Opportunity) opportunityDTO {

@@ -17,10 +17,9 @@
 package http
 
 import (
-	"time"
-
 	"github.com/ion-core/backend/internal/identity/domain"
 	"github.com/ion-core/backend/internal/identity/port"
+	"github.com/ion-core/backend/pkg/httpserver"
 )
 
 // =====================================================================
@@ -115,14 +114,14 @@ type createUserRequest struct {
 // from null" ambiguity in JSON PATCH semantics without dragging in JSON-Patch
 // machinery.
 type updateUserRequest struct {
-	EmployeeID     *string `json:"employee_id,omitempty"`
-	FullName       *string `json:"full_name,omitempty"`
-	Phone          *string `json:"phone,omitempty"`
-	BranchID       *string `json:"branch_id,omitempty"`
-	BranchLevel    *string `json:"branch_level,omitempty"`
-	ClearBranch    bool    `json:"clear_branch,omitempty"`
-	ReportsToID    *string `json:"reports_to_id,omitempty"`
-	ClearReportsTo bool    `json:"clear_reports_to,omitempty"`
+	EmployeeID      *string `json:"employee_id,omitempty"`
+	FullName        *string `json:"full_name,omitempty"`
+	Phone           *string `json:"phone,omitempty"`
+	BranchID        *string `json:"branch_id,omitempty"`
+	BranchLevel     *string `json:"branch_level,omitempty"`
+	ClearBranch     bool    `json:"clear_branch,omitempty"`
+	ReportsToID     *string `json:"reports_to_id,omitempty"`
+	ClearReportsTo  bool    `json:"clear_reports_to,omitempty"`
 	SalesType       *string `json:"sales_type,omitempty"`
 	ClearSalesType  bool    `json:"clear_sales_type,omitempty"`
 	TechnicianGrade *string `json:"technician_grade,omitempty"`
@@ -234,7 +233,7 @@ func toBranchDTO(b domain.Branch) branchDTO {
 		Level:     string(b.Level),
 		ParentID:  parentID,
 		Active:    b.Active,
-		CreatedAt: b.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt: httpserver.FormatRFC3339(b.CreatedAt),
 	}
 }
 
@@ -301,7 +300,7 @@ func toAuditEntryDTOs(es []domain.AuditEntry) []auditEntryDTO {
 		}
 		out = append(out, auditEntryDTO{
 			ID:           e.ID.String(),
-			Timestamp:    e.Timestamp.UTC().Format(time.RFC3339),
+			Timestamp:    httpserver.FormatRFC3339(e.Timestamp),
 			UserID:       uid,
 			UserFullName: e.UserFullName,
 			Module:       e.Module,
@@ -370,7 +369,7 @@ func toRosterRowDTO(r port.RosterRow) rosterRowDTO {
 		d.BranchID = &s
 	}
 	if r.UpdatedAt != nil {
-		s := r.UpdatedAt.UTC().Format(time.RFC3339)
+		s := httpserver.FormatRFC3339(*r.UpdatedAt)
 		d.UpdatedAt = &s
 	}
 	return d

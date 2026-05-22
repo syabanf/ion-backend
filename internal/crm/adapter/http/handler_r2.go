@@ -4,9 +4,6 @@ package http
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
-
 	"github.com/ion-core/backend/internal/crm/port"
 	"github.com/ion-core/backend/pkg/errors"
 	"github.com/ion-core/backend/pkg/httpserver"
@@ -32,9 +29,8 @@ func (h *Handler) listSchemas(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getSchema(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("schema.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "schema")
+	if !ok {
 		return
 	}
 	s, err := h.uc.GetOnboardingSchema(r.Context(), id)

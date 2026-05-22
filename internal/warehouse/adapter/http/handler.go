@@ -28,34 +28,34 @@ func NewHandler(uc port.UseCase, verifier *auth.Verifier) *Handler {
 
 // Mount — route map:
 //
-//   Warehouses
-//     GET   /warehouses                         [warehouse.warehouse.read]
-//     GET   /warehouses/{id}                    [warehouse.warehouse.read]
-//     POST  /warehouses                         [warehouse.warehouse.manage]
-//     PATCH /warehouses/{id}                    [warehouse.warehouse.manage]
+//	Warehouses
+//	  GET   /warehouses                         [warehouse.warehouse.read]
+//	  GET   /warehouses/{id}                    [warehouse.warehouse.read]
+//	  POST  /warehouses                         [warehouse.warehouse.manage]
+//	  PATCH /warehouses/{id}                    [warehouse.warehouse.manage]
 //
-//   Catalog
-//     GET   /catalog/items                      [warehouse.catalog.read]
-//     GET   /catalog/items/{id}                 [warehouse.catalog.read]
-//     POST  /catalog/items                      [warehouse.catalog.manage]
-//     PATCH /catalog/items/{id}                 [warehouse.catalog.manage]
+//	Catalog
+//	  GET   /catalog/items                      [warehouse.catalog.read]
+//	  GET   /catalog/items/{id}                 [warehouse.catalog.read]
+//	  POST  /catalog/items                      [warehouse.catalog.manage]
+//	  PATCH /catalog/items/{id}                 [warehouse.catalog.manage]
 //
-//   Inventory + intake
-//     GET   /warehouses/{id}/inventory          [warehouse.stock.read]
-//     GET   /warehouses/{id}/movements          [warehouse.stock.read]
-//     POST  /warehouses/{id}/intake             [warehouse.stock.intake]
+//	Inventory + intake
+//	  GET   /warehouses/{id}/inventory          [warehouse.stock.read]
+//	  GET   /warehouses/{id}/movements          [warehouse.stock.read]
+//	  POST  /warehouses/{id}/intake             [warehouse.stock.intake]
 //
-//   Assets
-//     GET   /assets                             [warehouse.stock.read]
-//     GET   /assets/{id}                        [warehouse.stock.read]
+//	Assets
+//	  GET   /assets                             [warehouse.stock.read]
+//	  GET   /assets/{id}                        [warehouse.stock.read]
 //
-//   Transfers
-//     GET   /transfers                          [warehouse.transfer.manage]
-//     GET   /transfers/{id}                     [warehouse.transfer.manage]
-//     POST  /transfers                          [warehouse.transfer.manage]
-//     POST  /transfers/{id}/dispatch            [warehouse.transfer.manage]
-//     POST  /transfers/{id}/receive             [warehouse.transfer.manage]
-//     POST  /transfers/{id}/cancel              [warehouse.transfer.manage]
+//	Transfers
+//	  GET   /transfers                          [warehouse.transfer.manage]
+//	  GET   /transfers/{id}                     [warehouse.transfer.manage]
+//	  POST  /transfers                          [warehouse.transfer.manage]
+//	  POST  /transfers/{id}/dispatch            [warehouse.transfer.manage]
+//	  POST  /transfers/{id}/receive             [warehouse.transfer.manage]
+//	  POST  /transfers/{id}/cancel              [warehouse.transfer.manage]
 func (h *Handler) Mount(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(httpserver.RequireAuth(h.verifier))
@@ -167,9 +167,8 @@ func (h *Handler) listWarehouses(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getWarehouse(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("warehouse.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "warehouse")
+	if !ok {
 		return
 	}
 	it, err := h.uc.GetWarehouse(r.Context(), id)
@@ -209,7 +208,7 @@ func (h *Handler) createWarehouse(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteJSON(w, http.StatusCreated, warehouseDTO{
 			ID: out.ID.String(), Name: out.Name, Code: out.Code,
 			Address: out.Address, Notes: out.Notes,
-			Active: out.Active, CreatedAt: out.CreatedAt.UTC().Format(time.RFC3339),
+			Active: out.Active, CreatedAt: httpserver.FormatRFC3339(out.CreatedAt),
 		})
 		return
 	}
@@ -217,9 +216,8 @@ func (h *Handler) createWarehouse(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateWarehouse(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("warehouse.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "warehouse")
+	if !ok {
 		return
 	}
 	var req updateWarehouseRequest
@@ -249,7 +247,7 @@ func (h *Handler) updateWarehouse(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteJSON(w, http.StatusOK, warehouseDTO{
 			ID: out.ID.String(), Name: out.Name, Code: out.Code,
 			Address: out.Address, Notes: out.Notes,
-			Active: out.Active, CreatedAt: out.CreatedAt.UTC().Format(time.RFC3339),
+			Active: out.Active, CreatedAt: httpserver.FormatRFC3339(out.CreatedAt),
 		})
 		return
 	}
@@ -290,9 +288,8 @@ func (h *Handler) listItems(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getItem(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("stock_item.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "stock_item")
+	if !ok {
 		return
 	}
 	it, err := h.uc.GetStockItem(r.Context(), id)
@@ -323,9 +320,8 @@ func (h *Handler) createItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateItem(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("stock_item.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "stock_item")
+	if !ok {
 		return
 	}
 	var req updateItemRequest
@@ -349,9 +345,8 @@ func (h *Handler) updateItem(w http.ResponseWriter, r *http.Request) {
 // =====================================================================
 
 func (h *Handler) inventory(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("warehouse.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "warehouse")
+	if !ok {
 		return
 	}
 	q := r.URL.Query()
@@ -373,9 +368,8 @@ func (h *Handler) inventory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) intake(w http.ResponseWriter, r *http.Request) {
-	whID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("warehouse.id_invalid", "id is not a valid uuid"))
+	whID, ok := httpserver.ParseUUIDParam(w, r, "id", "warehouse")
+	if !ok {
 		return
 	}
 	var req intakeRequest
@@ -453,9 +447,8 @@ func (h *Handler) intake(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) movements(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("warehouse.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "warehouse")
+	if !ok {
 		return
 	}
 	q := r.URL.Query()
@@ -516,9 +509,8 @@ func (h *Handler) listAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("asset.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "asset")
+	if !ok {
 		return
 	}
 	a, err := h.uc.GetAsset(r.Context(), id)
@@ -552,9 +544,8 @@ func (h *Handler) listTransfers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getTransfer(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("transfer.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "transfer")
+	if !ok {
 		return
 	}
 	t, err := h.uc.GetTransfer(r.Context(), id)
@@ -624,9 +615,8 @@ func (h *Handler) receiveTransfer(w http.ResponseWriter, r *http.Request) {
 	h.transferTransition(w, r, h.uc.ReceiveTransfer)
 }
 func (h *Handler) cancelTransfer(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("transfer.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "transfer")
+	if !ok {
 		return
 	}
 	if err := h.uc.CancelTransfer(r.Context(), id); err != nil {
@@ -640,9 +630,8 @@ func (h *Handler) transferTransition(
 	w http.ResponseWriter, r *http.Request,
 	fn func(ctx context.Context, id, performedBy uuid.UUID) (*domain.Transfer, error),
 ) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("transfer.id_invalid", "id is not a valid uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "transfer")
+	if !ok {
 		return
 	}
 	c := httpserver.ClaimsFromContext(r.Context())
@@ -661,4 +650,3 @@ func (h *Handler) transferTransition(
 // =====================================================================
 // helpers
 // =====================================================================
-

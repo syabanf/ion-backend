@@ -134,9 +134,8 @@ func (h *Handler) listInvoices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getInvoice(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("invoice.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "invoice")
+	if !ok {
 		return
 	}
 	v, err := h.uc.GetInvoice(r.Context(), id)
@@ -208,9 +207,8 @@ func (h *Handler) createInvoice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) issueInvoice(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("invoice.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "invoice")
+	if !ok {
 		return
 	}
 	v, err := h.uc.IssueInvoice(r.Context(), id)
@@ -222,9 +220,8 @@ func (h *Handler) issueInvoice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) cancelInvoice(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("invoice.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "invoice")
+	if !ok {
 		return
 	}
 	v, err := h.uc.CancelInvoice(r.Context(), id)
@@ -236,9 +233,8 @@ func (h *Handler) cancelInvoice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) recordPayment(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("invoice.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "invoice")
+	if !ok {
 		return
 	}
 	var req recordPaymentRequest
@@ -267,9 +263,8 @@ func (h *Handler) recordPayment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) orderOTCStatus(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpserver.WriteError(w, errors.Validation("order.id_invalid", "id is not a uuid"))
+	id, ok := httpserver.ParseUUIDParam(w, r, "id", "order")
+	if !ok {
 		return
 	}
 	paid, err := h.uc.IsOrderOTCPaid(r.Context(), id)

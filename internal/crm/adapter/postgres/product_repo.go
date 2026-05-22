@@ -24,19 +24,27 @@ func NewProductRepository(pool *pgxpool.Pool) *ProductRepository {
 
 var _ port.ProductRepository = (*ProductRepository)(nil)
 
+// Wave 77 (TC-PRD-014/016/018/022): productSelect now reads the 5
+// schema slot FKs. All nullable, so scan into *uuid.UUID pointers.
 const productSelect = `
 SELECT id, code, name, speed_mbps, monthly_price, otc_price,
-       temp_activation_window_hours, active, created_at
+       temp_activation_window_hours, active, created_at,
+       onboarding_schema_id, billing_schema_id, service_schema_id,
+       commission_schema_id, suspension_schema_id
 FROM crm.products
 `
 
 func (r *ProductRepository) Create(ctx context.Context, p *domain.Product) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO crm.products (id, code, name, speed_mbps, monthly_price, otc_price,
-		                          temp_activation_window_hours, active, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		                          temp_activation_window_hours, active, created_at,
+		                          onboarding_schema_id, billing_schema_id, service_schema_id,
+		                          commission_schema_id, suspension_schema_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 	`, p.ID, p.Code, p.Name, p.SpeedMbps, p.MonthlyPrice, p.OTCPrice,
-		p.TempActivationWindowHrs, p.Active, p.CreatedAt)
+		p.TempActivationWindowHrs, p.Active, p.CreatedAt,
+		p.OnboardingSchemaID, p.BillingSchemaID, p.ServiceSchemaID,
+		p.CommissionSchemaID, p.SuspensionSchemaID)
 	return mapDBError(err, "product.create", "create product")
 }
 
@@ -75,7 +83,9 @@ func (r *ProductRepository) List(ctx context.Context, f port.ProductListFilter) 
 	for rows.Next() {
 		var p domain.Product
 		if err := rows.Scan(&p.ID, &p.Code, &p.Name, &p.SpeedMbps, &p.MonthlyPrice,
-			&p.OTCPrice, &p.TempActivationWindowHrs, &p.Active, &p.CreatedAt); err != nil {
+			&p.OTCPrice, &p.TempActivationWindowHrs, &p.Active, &p.CreatedAt,
+			&p.OnboardingSchemaID, &p.BillingSchemaID, &p.ServiceSchemaID,
+			&p.CommissionSchemaID, &p.SuspensionSchemaID); err != nil {
 			return nil, derrors.Wrap(derrors.KindInternal, "db.product_scan", "scan product", err)
 		}
 		out = append(out, p)
@@ -87,7 +97,9 @@ func (r *ProductRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain
 	row := r.pool.QueryRow(ctx, productSelect+" WHERE id = $1", id)
 	var p domain.Product
 	err := row.Scan(&p.ID, &p.Code, &p.Name, &p.SpeedMbps, &p.MonthlyPrice,
-		&p.OTCPrice, &p.TempActivationWindowHrs, &p.Active, &p.CreatedAt)
+		&p.OTCPrice, &p.TempActivationWindowHrs, &p.Active, &p.CreatedAt,
+		&p.OnboardingSchemaID, &p.BillingSchemaID, &p.ServiceSchemaID,
+		&p.CommissionSchemaID, &p.SuspensionSchemaID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, derrors.NotFound("product.not_found", "product not found")
 	}
@@ -101,10 +113,14 @@ func (r *ProductRepository) Update(ctx context.Context, p *domain.Product) error
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE crm.products
 		   SET name = $2, speed_mbps = $3, monthly_price = $4, otc_price = $5,
-		       temp_activation_window_hours = $6, active = $7
+		       temp_activation_window_hours = $6, active = $7,
+		       onboarding_schema_id = $8, billing_schema_id = $9, service_schema_id = $10,
+		       commission_schema_id = $11, suspension_schema_id = $12
 		 WHERE id = $1
 	`, p.ID, p.Name, p.SpeedMbps, p.MonthlyPrice, p.OTCPrice,
-		p.TempActivationWindowHrs, p.Active)
+		p.TempActivationWindowHrs, p.Active,
+		p.OnboardingSchemaID, p.BillingSchemaID, p.ServiceSchemaID,
+		p.CommissionSchemaID, p.SuspensionSchemaID)
 	if err != nil {
 		return mapDBError(err, "product.update", "update product")
 	}
