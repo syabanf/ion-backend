@@ -19,6 +19,16 @@ const (
 	RescheduleOther            RescheduleReason = "other"
 )
 
+// Valid mirrors the DB CHECK on field.wo_reschedules.reason.
+func (r RescheduleReason) Valid() bool {
+	switch r {
+	case RescheduleCustomerNotAvail, RescheduleSiteNotReady,
+		RescheduleEquipmentIssue, RescheduleCustomerRequest, RescheduleOther:
+		return true
+	}
+	return false
+}
+
 // Reschedule is the audit row that captures "we moved this WO to a new date".
 // The wo_reschedules table existed in M5 r1 but had no service/UI; r2 wires it.
 type Reschedule struct {

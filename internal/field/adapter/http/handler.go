@@ -158,9 +158,19 @@ func (h *Handler) createWO(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, errors.Unauthorized("auth.missing", "authentication required"))
 		return
 	}
+	// Wave 71 — pre-cast enum validation. An invalid priority used to
+	// flow through the cast unchecked, fail the DB CHECK on insert, and
+	// surface to the client as a 500. The Valid() guard short-circuits
+	// to a clean 400 with the offending value cited.
+	priority := domain.Priority(req.Priority)
+	if req.Priority != "" && !priority.Valid() {
+		httpserver.WriteError(w, errors.Validation("wo.priority_invalid",
+			"priority must be high|medium|low"))
+		return
+	}
 	in := port.CreateWOFromOrderInput{
 		OrderID:   orderID,
-		Priority:  domain.Priority(req.Priority),
+		Priority:  priority,
 		Notes:     req.Notes,
 		CreatedBy: c.UserID,
 	}
@@ -220,11 +230,17 @@ func (h *Handler) assignWO(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, errors.Validation("assign.lead_invalid", "lead_id is not a uuid"))
 		return
 	}
+	leadGrade := domain.TechGrade(req.LeadGrade)
+	if !leadGrade.Valid() {
+		httpserver.WriteError(w, errors.Validation("assign.lead_grade_invalid",
+			"lead_grade must be senior|junior"))
+		return
+	}
 	c := httpserver.ClaimsFromContext(r.Context())
 	in := port.AssignTechniciansInput{
 		WOID:       id,
 		LeadID:     leadID,
-		LeadGrade:  domain.TechGrade(req.LeadGrade),
+		LeadGrade:  leadGrade,
 		AssignedBy: c.UserID,
 	}
 	if req.ObserverID != nil && *req.ObserverID != "" {
@@ -236,6 +252,11 @@ func (h *Handler) assignWO(w http.ResponseWriter, r *http.Request) {
 		in.ObserverID = &oid
 		if req.ObserverGrade != nil {
 			g := domain.TechGrade(*req.ObserverGrade)
+			if !g.Valid() {
+				httpserver.WriteError(w, errors.Validation("assign.observer_grade_invalid",
+					"observer_grade must be senior|junior"))
+				return
+			}
 			in.ObserverGrade = &g
 		}
 	}
@@ -259,8 +280,14 @@ func (h *Handler) statusWO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := httpserver.ClaimsFromContext(r.Context())
+	status := domain.WOStatus(req.Status)
+	if !status.Valid() {
+		httpserver.WriteError(w, errors.Validation("wo.status_invalid",
+			"status not in the allowed set (see WOStatus enum)"))
+		return
+	}
 	d, err := h.uc.UpdateStatus(r.Context(), port.UpdateWOStatusInput{
-		WOID: id, Status: domain.WOStatus(req.Status), Notes: req.Notes, By: c.UserID,
+		WOID: id, Status: status, Notes: req.Notes, By: c.UserID,
 	})
 	if err != nil {
 		httpserver.WriteError(w, err)
@@ -315,12 +342,24 @@ func (h *Handler) addResolution(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, err)
 		return
 	}
+	category := domain.ResolutionCategory(req.Category)
+	if !category.Valid() {
+		httpserver.WriteError(w, errors.Validation("resolution.category_invalid",
+			"category not in the allowed set (config|hardware|cabling|signal|software|other)"))
+		return
+	}
+	resStatus := domain.ResolutionStatus(req.ResolutionStatus)
+	if !resStatus.Valid() {
+		httpserver.WriteError(w, errors.Validation("resolution.status_invalid",
+			"resolution_status not in the allowed set"))
+		return
+	}
 	c := httpserver.ClaimsFromContext(r.Context())
 	out, err := h.uc.AddResolutionItem(r.Context(), port.AddResolutionItemInput{
 		WOID: id, ItemLabel: req.ItemLabel,
-		Category: domain.ResolutionCategory(req.Category),
+		Category: category,
 		Finding:  req.Finding, ActionTaken: req.ActionTaken,
-		ResolutionStatus: domain.ResolutionStatus(req.ResolutionStatus),
+		ResolutionStatus: resStatus,
 		TimeSpentMinutes: req.TimeSpentMinutes,
 		ResolvedBy:       c.UserID,
 	})
@@ -355,6 +394,11 @@ func (h *Handler) submitBAST(w http.ResponseWriter, r *http.Request) {
 	if mode == "" {
 		mode = domain.SignOffOnSite
 	}
+	if !mode.Valid() {
+		httpserver.WriteError(w, errors.Validation("bast.sign_off_mode_invalid",
+			"sign_off_mode must be on_site|remote"))
+		return
+	}
 	b, err := h.uc.SubmitBAST(r.Context(), port.SubmitBASTInput{
 		WOID:           id,
 		SignOffMode:    mode,
@@ -382,9 +426,18 @@ func (h *Handler) verifyBAST(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, err)
 		return
 	}
+	decision := domain.NOCStatus(req.Decision)
+	// Only approved|rejected are valid here — pending is the default
+	// state at row creation, not a verify-time outcome. Both Valid()
+	// values + the explicit subset check defend against silent 500s.
+	if !decision.Valid() || decision == domain.NOCStatusPending {
+		httpserver.WriteError(w, errors.Validation("bast.decision_invalid",
+			"decision must be approved|rejected"))
+		return
+	}
 	c := httpserver.ClaimsFromContext(r.Context())
 	b, err := h.uc.VerifyBAST(r.Context(), port.VerifyBASTInput{
-		BASTID: id, Decision: domain.NOCStatus(req.Decision),
+		BASTID: id, Decision: decision,
 		Notes: req.Notes, VerifiedBy: c.UserID,
 	})
 	if err != nil {

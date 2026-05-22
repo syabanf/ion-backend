@@ -46,6 +46,20 @@ const (
 	WOStatusCancelled              WOStatus = "cancelled"
 )
 
+// Valid mirrors the DB CHECK constraint on field.work_orders.status so
+// HTTP handlers can return a clean 400 instead of letting an invalid
+// string flow through to the DB and surface as a 500.
+func (s WOStatus) Valid() bool {
+	switch s {
+	case WOStatusCreated, WOStatusUnassigned, WOStatusAssigned,
+		WOStatusDispatched, WOStatusInProgress,
+		WOStatusPendingNOCVerification, WOStatusCompleted,
+		WOStatusRescheduled, WOStatusCancelled:
+		return true
+	}
+	return false
+}
+
 type Priority string
 
 const (
@@ -53,6 +67,26 @@ const (
 	PriorityMedium Priority = "medium"
 	PriorityLow    Priority = "low"
 )
+
+// Valid mirrors the DB CHECK constraint on field.work_orders.priority.
+// Empty string is treated as "not provided" (caller defaults it); use
+// Valid() only when the caller explicitly passes a value.
+func (p Priority) Valid() bool {
+	switch p {
+	case PriorityHigh, PriorityMedium, PriorityLow:
+		return true
+	}
+	return false
+}
+
+// Valid mirrors the DB CHECK on field.work_orders.wo_type.
+func (t WOType) Valid() bool {
+	switch t {
+	case WOTypeNewInstallation, WOTypeMaintenance, WOTypeTermination:
+		return true
+	}
+	return false
+}
 
 // WorkOrder is the operational anchor. Other bounded contexts touch it:
 //   - M6 invoice references order_id; pays before NOC verifies BAST

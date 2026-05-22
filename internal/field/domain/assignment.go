@@ -13,6 +13,17 @@ const (
 	GradeJunior TechGrade = "junior"
 )
 
+// Valid mirrors the DB CHECK on field.wo_assignments.grade so HTTP
+// handlers can return a clean 400 for bad input rather than letting
+// the DB violation surface as a 500.
+func (g TechGrade) Valid() bool {
+	switch g {
+	case GradeSenior, GradeJunior:
+		return true
+	}
+	return false
+}
+
 type WORole string
 
 const (

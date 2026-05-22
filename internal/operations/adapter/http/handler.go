@@ -464,6 +464,16 @@ func (h *Handler) createAnnouncement(w http.ResponseWriter, r *http.Request) {
 	if req.Severity == "" {
 		req.Severity = "info"
 	}
+	// Wave 71 — mirror the DB CHECK on
+	// operations.internal_announcements.severity. Without this, a
+	// typo or stale client → 500. With it, a clean 400.
+	switch req.Severity {
+	case "info", "warning", "critical":
+	default:
+		httpserver.WriteError(w, errors.Validation("ops.announcement_severity_invalid",
+			"severity must be info|warning|critical"))
+		return
+	}
 	if len(req.Targeting) == 0 {
 		req.Targeting = json.RawMessage(`{}`)
 	}

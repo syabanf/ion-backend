@@ -15,6 +15,15 @@ const (
 	SignOffRemote SignOffMode = "remote"
 )
 
+// Valid mirrors the DB CHECK on field.basts.sign_off_mode.
+func (m SignOffMode) Valid() bool {
+	switch m {
+	case SignOffOnSite, SignOffRemote:
+		return true
+	}
+	return false
+}
+
 type NOCStatus string
 
 const (
@@ -22,6 +31,15 @@ const (
 	NOCStatusApproved NOCStatus = "approved"
 	NOCStatusRejected NOCStatus = "rejected"
 )
+
+// Valid mirrors the DB CHECK on field.basts.noc_status.
+func (s NOCStatus) Valid() bool {
+	switch s {
+	case NOCStatusPending, NOCStatusApproved, NOCStatusRejected:
+		return true
+	}
+	return false
+}
 
 // BAST (Berita Acara Serah Terima) — immutable on submit per PRD:
 // rejection creates a NEW row; the old row stays forever as history.

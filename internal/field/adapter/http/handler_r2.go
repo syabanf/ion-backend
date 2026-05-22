@@ -41,9 +41,15 @@ func (h *Handler) rescheduleWO(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, errors.Unauthorized("auth.missing", "authentication required"))
 		return
 	}
+	reason := domain.RescheduleReason(req.Reason)
+	if !reason.Valid() {
+		httpserver.WriteError(w, errors.Validation("reschedule.reason_invalid",
+			"reason must be one of customer_not_available|site_not_ready|equipment_issue|customer_request|other"))
+		return
+	}
 	d, err := h.uc.RescheduleWO(r.Context(), port.RescheduleWOInput{
 		WOID:          id,
-		Reason:        domain.RescheduleReason(req.Reason),
+		Reason:        reason,
 		Notes:         req.Notes,
 		NewDate:       when,
 		RescheduledBy: c.UserID,
