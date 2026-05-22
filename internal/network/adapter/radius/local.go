@@ -46,32 +46,62 @@ func NewLocalClient(pool *pgxpool.Pool, log *slog.Logger) *LocalRadiusClient {
 var _ port.RadiusClient = (*LocalRadiusClient)(nil)
 
 // Provision creates a new RADIUS account in TEMPORARY state.
-// Idempotent on customer_id — if an account already exists we return it
-// (the onboarding flow should never call Provision twice for the same
-// customer, but if it does we want a safe no-op).
+// Idempotent on customer_id — if an account already exists we refresh
+// its `temp_expires_at` deadline (so a re-scheduled WO extends the
+// grace window) and return the row. The PRD §13 lifecycle treats
+// re-provision as a no-op-with-deadline-refresh rather than a duplicate.
+//
+// WindowHours = 0 falls back to the system default (72h) so callers
+// that don't know the product's Service Schema still get sane behavior.
 func (c *LocalRadiusClient) Provision(ctx context.Context, in domain.ProvisionInput) (*domain.RadiusAccount, error) {
+	window := in.WindowHours
+	if window <= 0 {
+		window = 72
+	}
+	now := time.Now().UTC()
+	expires := now.Add(time.Duration(window) * time.Hour)
+
 	if existing, err := c.Find(ctx, in.CustomerID); err == nil && existing != nil {
-		c.log.Warn("radius.Provision called twice", "customer_id", in.CustomerID)
+		// Refresh deadline; do not flip back from PERMANENT/SUSPENDED.
+		// This is the WO-rescheduled path: same customer, same RADIUS,
+		// later expiry.
+		if existing.Status == domain.RadiusStatusTemporary {
+			_, err := c.pool.Exec(ctx, `
+				UPDATE network.radius_accounts
+				   SET temp_expires_at = $2, updated_at = $3
+				 WHERE customer_id = $1
+			`, in.CustomerID, expires, now)
+			if err != nil {
+				return nil, derrors.Wrap(derrors.KindInternal, "radius.refresh_expiry",
+					"refresh temp expiry", err)
+			}
+			c.log.Info("radius temp expiry refreshed",
+				"customer_id", in.CustomerID, "window_hours", window)
+			return c.Find(ctx, in.CustomerID)
+		}
+		c.log.Warn("radius.Provision skipped — account not in TEMPORARY",
+			"customer_id", in.CustomerID, "status", string(existing.Status))
 		return existing, nil
 	}
+
 	hash, err := auth.HashPassword(in.PasswordPlain)
 	if err != nil {
 		return nil, derrors.Wrap(derrors.KindInternal, "radius.hash", "hash password", err)
 	}
-	now := time.Now().UTC()
 	id := uuid.New()
 	_, err = c.pool.Exec(ctx, `
 		INSERT INTO network.radius_accounts
 			(id, customer_id, username, password_hash,
-			 vlan_id, bandwidth_profile_id, status, temp_activated_at,
+			 vlan_id, bandwidth_profile_id, status,
+			 temp_activated_at, temp_expires_at,
 			 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'temporary', $7, $8, $8)
-	`, id, in.CustomerID, in.Username, hash, in.VLANID, in.BandwidthProfileID, now, now)
+		VALUES ($1, $2, $3, $4, $5, $6, 'temporary', $7, $8, $9, $9)
+	`, id, in.CustomerID, in.Username, hash, in.VLANID, in.BandwidthProfileID, now, expires, now)
 	if err != nil {
 		return nil, derrors.Wrap(derrors.KindInternal, "radius.insert", "create radius account", err)
 	}
 	c.log.Info("radius account provisioned (TEMPORARY)",
-		"customer_id", in.CustomerID, "username", in.Username)
+		"customer_id", in.CustomerID, "username", in.Username, "window_hours", window)
 	return c.Find(ctx, in.CustomerID)
 }
 
@@ -123,7 +153,8 @@ func (c *LocalRadiusClient) Find(ctx context.Context, customerID uuid.UUID) (*do
 	row := c.pool.QueryRow(ctx, `
 		SELECT id, customer_id, username, password_hash,
 		       vlan_id, COALESCE(bandwidth_profile_id, ''), ip_address,
-		       status, temp_activated_at, perm_activated_at, suspended_at,
+		       status, temp_activated_at, temp_expires_at,
+		       perm_activated_at, suspended_at,
 		       created_at, updated_at
 		FROM network.radius_accounts
 		WHERE customer_id = $1
@@ -137,7 +168,8 @@ func (c *LocalRadiusClient) Find(ctx context.Context, customerID uuid.UUID) (*do
 	err := row.Scan(
 		&a.ID, &a.CustomerID, &a.Username, &a.PasswordHash,
 		&a.VLANID, &a.BandwidthProfileID, &ip, &status,
-		&a.TempActivatedAt, &a.PermActivatedAt, &a.SuspendedAt,
+		&a.TempActivatedAt, &a.TempExpiresAt,
+		&a.PermActivatedAt, &a.SuspendedAt,
 		&a.CreatedAt, &a.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

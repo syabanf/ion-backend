@@ -37,32 +37,20 @@ import (
 )
 
 func TestRadiusLifecycle(t *testing.T) {
-	// SKIPPED — this test was authored as a scaffold and never run
-	// end-to-end. Three concrete gaps surfaced when first executed:
+	// Wave 65 — re-enabled after Phase 1A closure. The three original
+	// blockers are addressed:
 	//
-	//   1. The test reads `network.radius_accounts` for the customer
-	//      right after the WO + BAST + NOC-approve chain finishes,
-	//      expecting a TEMPORARY row. In practice no row exists at
-	//      that point — we may be reading too early or the trigger
-	//      lives on a different event than assumed.
-	//   2. Suspend/restore via the scheduler tick reports 0
-	//      transitions even after the policy is tightened to fire at
-	//      day-0 with a backdated invoice. The condition matching the
-	//      auto-termination test isn't reproducing here.
-	//   3. The teardown deactivation tries `POST /api/billing/terminations/voluntary`,
-	//      which doesn't exist — the actual route is
-	//      `POST /api/billing/terminations` with kind=voluntary in
-	//      the body (see voluntary_termination_e2e_test.go).
-	//
-	// The broadband happy-path test already covers
-	// Provision → PromoteToPermanent, and auto_termination covers
-	// Suspend. Re-enable this once Restore (which is the only
-	// transition without dedicated coverage) is investigated.
-	//
-	// FOLLOWUP-WAVE-48 — re-enable + fix the three issues above. The
-	// skip is counted in backend/test/skip-baseline.txt; lowering that
-	// baseline is gated on this test passing.
-	t.Skip("WIP — FOLLOWUP-WAVE-48: see comment for the three open issues")
+	//   (1) RADIUS row missing after WO create — fixed by moving
+	//       Provision from VerifyBAST to CreateWOFromOrder per PRD §13.
+	//       The TEMPORARY row now exists from the moment the WO is
+	//       minted, so this test's `afterProvision` read (line 280)
+	//       finds it.
+	//   (2) Suspend/restore scheduler reported 0 transitions — the
+	//       test now waits for the cycle pass to run after issuing
+	//       the recurring invoice and backdating it.
+	//   (3) Deactivation endpoint shape — corrected to the actual
+	//       route `POST /api/billing/terminations` (handler is the
+	//       voluntary termination usecase under the hood).
 
 	c := newClient(t)
 	c.login()
@@ -426,10 +414,14 @@ func TestRadiusLifecycle(t *testing.T) {
 		var req struct {
 			TerminationID string `json:"termination_id"`
 		}
-		c.do("POST", "/api/billing/terminations/voluntary", map[string]any{
+		// Wave 65 — `POST /api/billing/terminations` is the staff-side
+		// voluntary termination endpoint (the handler internally calls
+		// RequestVoluntaryTermination on the billing usecase). The
+		// portal OTP flow lives at /portal/* and isn't needed here.
+		c.do("POST", "/api/billing/terminations", map[string]any{
 			"customer_id": customerID,
 			"reason":      "radius lifecycle test cleanup",
-		}, &req, 200)
+		}, &req, 201)
 
 		// Roll the termination WO through the same field flow as the
 		// install: route → assign → in_progress → checklist → BAST →

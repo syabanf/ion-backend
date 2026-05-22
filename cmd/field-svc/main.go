@@ -28,12 +28,14 @@ import (
 	crmpg "github.com/ion-core/backend/internal/crm/adapter/postgres"
 	crmusecase "github.com/ion-core/backend/internal/crm/usecase"
 	fieldbilling "github.com/ion-core/backend/internal/field/adapter/billing"
+	fieldbranch "github.com/ion-core/backend/internal/field/adapter/branch"
 	fieldcrm "github.com/ion-core/backend/internal/field/adapter/crm"
 	fieldhttp "github.com/ion-core/backend/internal/field/adapter/http"
 	fieldpg "github.com/ion-core/backend/internal/field/adapter/postgres"
 	fieldgwnet "github.com/ion-core/backend/internal/field/adapter/network"
 	fieldgwuploads "github.com/ion-core/backend/internal/field/adapter/uploads"
 	fieldusecase "github.com/ion-core/backend/internal/field/usecase"
+	opshttp "github.com/ion-core/backend/internal/operations/adapter/http"
 	networkpg "github.com/ion-core/backend/internal/network/adapter/postgres"
 	networkradius "github.com/ion-core/backend/internal/network/adapter/radius"
 	networkusecase "github.com/ion-core/backend/internal/network/usecase"
@@ -181,12 +183,21 @@ func main() {
 	// PERMANENT_ACTIVE, then the CRM gateway flips the customer.
 	activator := fieldgwnet.NewActivator(radiusClient)
 
+	// Wave 65 (Phase 1A closure) — branch resolver implements the three
+	// new ports for per-branch SLA, address-to-Sub Area resolution, and
+	// Team Leader escalation chain. All three are optional from the
+	// usecase's perspective; nil falls back to pre-Wave-65 behavior.
+	branchResolver := fieldbranch.New(pool)
+
 	svc := fieldusecase.NewService(woRepo, assignRepo, checklistRepo, resolutionRepo, bastRepo, teamRepo, crmGW).
 		WithBilling(fieldBillingGW).
 		WithReschedule(rescheduleRepo).
 		WithUploads(uploadsGW).
 		WithRadius(radiusReader).
-		WithActivation(activator)
+		WithActivation(activator).
+		WithBranchSLAResolver(branchResolver).
+		WithAddressResolver(branchResolver).
+		WithTeamLeaderLookup(branchResolver)
 
 	handler := fieldhttp.NewHandler(svc, verifier)
 	uploadHandler := uploadshttp.NewHandler(uploadSvc, localStore, verifier)
@@ -200,6 +211,10 @@ func main() {
 	// as crm-phase2: direct pgxpool, single file. Hexagonal layering
 	// can come later once volumes justify it.
 	fieldhttp.NewPhase2Handler(pool, verifier).Mount(server.Router)
+
+	// Wave 65 — Operations module (Phase 1A closure).
+	// Bulk ops + announcements + calendar + SLA dashboard + War Room hook.
+	opshttp.NewHandler(pool, verifier).Mount(server.Router)
 
 	// M5 r3 — kick off the SLA-breach watcher.
 	go svc.StartSLAWatcher(ctx, 5*time.Minute, log)

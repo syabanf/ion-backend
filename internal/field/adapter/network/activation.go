@@ -40,12 +40,16 @@ func NewActivator(c ProvisioningRadiusClient) *Activator {
 
 var _ port.ActivationGateway = (*Activator)(nil)
 
-// ProvisionAndActivate mints (or finds) the customer's RADIUS account
-// and drives it to PERMANENT_ACTIVE. The username we use is the
-// customer_number — stable, human-readable, and unique per customer.
-// The bandwidth profile id is the product code for now; round-4 will
-// look up a per-product profile from a separate table.
-func (a *Activator) ProvisionAndActivate(ctx context.Context, in port.ActivationProjection) error {
+// ProvisionAtWO mints the customer's RADIUS account in TEMPORARY state
+// with a `temp_expires_at = now() + windowHours`. Per PRD §13 this fires
+// from CreateWOFromOrder so the account exists from the moment a
+// technician picks up the WO. Idempotent: if the row already exists in
+// TEMPORARY, the deadline is refreshed; in PERMANENT/SUSPENDED it's
+// left untouched.
+//
+// windowHours = 0 falls back to the system default (72h) so callers
+// missing product context still produce a row.
+func (a *Activator) ProvisionAtWO(ctx context.Context, in port.ActivationProjection, windowHours int) error {
 	pwd, err := randomPassword(16)
 	if err != nil {
 		return fmt.Errorf("activation: generate password: %w", err)
@@ -53,9 +57,6 @@ func (a *Activator) ProvisionAndActivate(ctx context.Context, in port.Activation
 	username := in.CustomerNumber
 	bandwidth := in.ProductCode
 	if bandwidth == "" {
-		// Customers without a product (legacy / promo paths) still get
-		// a RADIUS account, but the bandwidth profile is left as a
-		// placeholder string the operator can edit later.
 		bandwidth = "default"
 	}
 	if _, err := a.client.Provision(ctx, networkdomain.ProvisionInput{
@@ -63,8 +64,26 @@ func (a *Activator) ProvisionAndActivate(ctx context.Context, in port.Activation
 		Username:           username,
 		PasswordPlain:      pwd,
 		BandwidthProfileID: bandwidth,
+		WindowHours:        windowHours,
 	}); err != nil {
 		return fmt.Errorf("activation: provision radius: %w", err)
+	}
+	return nil
+}
+
+// ProvisionAndActivate mints (or finds) the customer's RADIUS account
+// and drives it to PERMANENT_ACTIVE. The username we use is the
+// customer_number — stable, human-readable, and unique per customer.
+// The bandwidth profile id is the product code for now; round-4 will
+// look up a per-product profile from a separate table.
+//
+// As of Wave 65 this method preserves its original contract — it both
+// provisions and promotes — but for the happy path the row was already
+// minted at WO creation by ProvisionAtWO, so the Provision call here
+// just refreshes the expiry then PromoteToPermanent flips state.
+func (a *Activator) ProvisionAndActivate(ctx context.Context, in port.ActivationProjection) error {
+	if err := a.ProvisionAtWO(ctx, in, 0); err != nil {
+		return err
 	}
 	if _, err := a.client.PromoteToPermanent(ctx, in.CustomerID); err != nil {
 		return fmt.Errorf("activation: promote radius: %w", err)

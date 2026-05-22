@@ -20,15 +20,22 @@ import (
 
 // OrderProjection is the narrow read the field service needs from CRM
 // when creating a WO from an order.
+//
+// Wave 65 adds TempActivationWindowHrs so the field service can stamp
+// the RADIUS temp_expires_at deadline without an extra CRM round-trip.
+// Defaults to 72 (the system default) when the product is missing or
+// the field is zero.
 type OrderProjection struct {
-	OrderID     uuid.UUID
-	CustomerID  uuid.UUID
-	FullName    string
-	Phone       string
-	Address     string
-	BranchID    *uuid.UUID
-	ProductCode string
-	ProductName string
+	OrderID                 uuid.UUID
+	CustomerID              uuid.UUID
+	FullName                string
+	Phone                   string
+	Address                 string
+	BranchID                *uuid.UUID
+	ProductCode             string
+	ProductName             string
+	SpeedMbps               int
+	TempActivationWindowHrs int
 }
 
 // ActivationProjection is what the activation hook needs when an
@@ -63,8 +70,54 @@ type CRMGateway interface {
 //
 // Field-svc holds this gateway directly (round-3 in-process); round-4
 // swaps to an HTTP call against network-svc.
+//
+// Wave 65 splits the lifecycle per PRD §13:
+//
+//	ProvisionAtWO         — WO created     → TEMPORARY (with temp_expires_at)
+//	ProvisionAndActivate  — NOC BAST OK    → PERMANENT_ACTIVE
+//
+// ProvisionAtWO is idempotent — if the account already exists we
+// just refresh temp_expires_at. ProvisionAndActivate still calls
+// Provision under the hood so a missing TEMPORARY row (legacy data,
+// or a customer whose WO predates Wave 65) is recovered transparently.
 type ActivationGateway interface {
+	ProvisionAtWO(ctx context.Context, in ActivationProjection, windowHours int) error
 	ProvisionAndActivate(ctx context.Context, in ActivationProjection) error
+}
+
+// BranchSLAResolver returns the per-branch install SLA (in minutes)
+// for a given branch_id. PRD §3 — Sub Area inherits from Area which
+// inherits from Regional. The implementation walks the parent chain
+// and returns the platform default if none set.
+//
+// Wave 65 added the SLA columns; this port keeps the lookup pluggable
+// so field-svc can swap an in-process call for an HTTP one later.
+type BranchSLAResolver interface {
+	ResolveInstallSLAMinutes(ctx context.Context, branchID uuid.UUID) (int, error)
+}
+
+// AddressToBranchResolver resolves a free-form installation address to
+// the Sub Area branch_id whose `geo_polygon` contains the point
+// returned by the geocoder. PRD §3 says address resolution is required
+// for Phase 1A; pre-Wave-65 the CRM pre-stamped branch_id from the
+// customer's home branch, which broke when an order's install address
+// fell in a different area than the registered customer.
+//
+// Returns (nil, nil) when the address falls outside all polygons —
+// caller decides whether to escalate (block) or fall through to the
+// pre-stamped branch.
+type AddressToBranchResolver interface {
+	ResolveAddress(ctx context.Context, address string) (*uuid.UUID, error)
+}
+
+// TeamLeaderLookup finds the active Team Leader user_id for a branch,
+// escalating Sub Area → Area → Regional when the child branch has no
+// TL. Returns (nil, nil) when no TL exists anywhere in the chain.
+//
+// Wave 65 — supports the PRD §9 routing rule: "if no TL at Sub Area,
+// escalate to Area; if none, Regional."
+type TeamLeaderLookup interface {
+	FindTeamLeader(ctx context.Context, branchID uuid.UUID) (*uuid.UUID, *uuid.UUID, error) // returns (userID, resolvedBranchID, err)
 }
 
 // BillingGateway is the cross-context check the BAST verify flow uses

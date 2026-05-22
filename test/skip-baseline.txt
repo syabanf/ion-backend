@@ -12,9 +12,7 @@
 # in the PR explaining why a new skip is genuinely the right call
 # (vs. fixing the underlying precondition or making setup explicit).
 #
-# Composition of the current 2 (as of Wave 54 commit):
-#   * test/e2e/radius_lifecycle_e2e_test.go — 1 hard skip (FOLLOWUP-WAVE-48,
-#     three documented gaps requiring live-stack investigation).
+# Composition of the current 1 (as of Wave 65 commit):
 #   * test/e2e/p1p2_endpoints_test.go:117 — pickFirst() fallthrough for
 #     tables outside the auto-fixture path (crm.customers + field.work_orders
 #     are auto-fixtured via ensureSharedCustomer / ensureSharedWOID;
@@ -31,4 +29,6 @@
 #   Wave 54:  3 → 2 — TestP1P2_GPSStreaming now auto-fixtures via
 #            ensureWOAssignedToTech (walks WO through route + assign
 #            with tech@ion.local as lead technician)
-2
+#   Wave 65:  2 → 1 — radius_lifecycle re-enabled after Phase 1A closure
+#            (Provision moved to WO creation per PRD §13)
+1

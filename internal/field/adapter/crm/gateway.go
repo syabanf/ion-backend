@@ -79,6 +79,8 @@ func (g *Gateway) OrderForWO(ctx context.Context, orderID uuid.UUID) (*port.Orde
 				if p.ID == *o.ProductID {
 					proj.ProductCode = p.Code
 					proj.ProductName = p.Name
+					proj.SpeedMbps = p.SpeedMbps
+					proj.TempActivationWindowHrs = p.TempActivationWindowHrs
 					break
 				}
 			}

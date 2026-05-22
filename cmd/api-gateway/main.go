@@ -57,6 +57,10 @@ func main() {
 		"/portal":        fmt.Sprintf("http://localhost:%s", getenv("CRM_SVC_PORT", "8083")),
 		"/api/field":      fmt.Sprintf("http://localhost:%s", getenv("FIELD_SVC_PORT", "8087")),
 		"/api/uploads":    fmt.Sprintf("http://localhost:%s", getenv("FIELD_SVC_PORT", "8087")),
+		// Wave 65 — Operations module (Phase 1A closure). Hosted in
+		// field-svc alongside maintenance_events; gateway strips the
+		// /api/operations prefix exactly like /api/field.
+		"/api/operations": fmt.Sprintf("http://localhost:%s", getenv("FIELD_SVC_PORT", "8087")),
 		"/api/billing":    fmt.Sprintf("http://localhost:%s", getenv("BILLING_SVC_PORT", "8084")),
 		"/api/enterprise": fmt.Sprintf("http://localhost:%s", getenv("ENTERPRISE_SVC_PORT", "8088")),
 	}

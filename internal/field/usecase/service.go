@@ -42,6 +42,9 @@ type Service struct {
 	uploads    port.UploadsGateway        // M5 r3 — optional; nil disables GPS gate
 	radius     port.RadiusReader          // optional; nil disables ONT config endpoint
 	activation port.ActivationGateway     // optional; nil = no auto-activation on BAST approve
+	branchSLA  port.BranchSLAResolver     // Wave 65 — optional; nil falls back to 24h
+	addrToBranch port.AddressToBranchResolver // Wave 65 — optional; nil keeps pre-stamped branch_id
+	teamLookup port.TeamLeaderLookup        // Wave 65 — optional; nil disables escalation chain
 }
 
 // WithActivation attaches the activation gateway so VerifyBAST(approved)
@@ -88,6 +91,25 @@ func NewService(
 // and the M6 wiring (field-svc embedding billing usecase) sets it.
 func (s *Service) WithBilling(b port.BillingGateway) *Service {
 	s.billing = b
+	return s
+}
+
+// Wave 65 builder methods — all optional. Without them the service
+// falls back to the pre-Wave-65 behavior (pre-stamped branch_id, 24h
+// hardcoded SLA, no escalation).
+
+func (s *Service) WithBranchSLAResolver(r port.BranchSLAResolver) *Service {
+	s.branchSLA = r
+	return s
+}
+
+func (s *Service) WithAddressResolver(r port.AddressToBranchResolver) *Service {
+	s.addrToBranch = r
+	return s
+}
+
+func (s *Service) WithTeamLeaderLookup(l port.TeamLeaderLookup) *Service {
+	s.teamLookup = l
 	return s
 }
 
@@ -140,10 +162,12 @@ func (s *Service) CreateWOFromOrder(ctx context.Context, in port.CreateWOFromOrd
 	}
 	if in.ScheduledDate != nil {
 		w.ScheduledDate = in.ScheduledDate
-		// M5 r2 — set SLA due to scheduled_date + 24h as a hardcoded
-		// default. Round-3 will read the product's SLA window from
-		// platform_config / product.temp_activation_window_hours.
-		due := in.ScheduledDate.Add(24 * time.Hour)
+		// Wave 65 — SLA due is now driven by per-branch SLA config
+		// (identity.branches.sla_install_minutes), falling back to the
+		// platform default (24h). The branch repo handles the
+		// Sub Area → Area → Regional inheritance chain.
+		slaMinutes := s.resolveInstallSLAMinutes(ctx, proj.BranchID)
+		due := in.ScheduledDate.Add(time.Duration(slaMinutes) * time.Minute)
 		w.SLADueAt = &due
 	}
 	// New WOs go straight to 'unassigned' so the Team Leader's queue can
@@ -154,7 +178,43 @@ func (s *Service) CreateWOFromOrder(ctx context.Context, in port.CreateWOFromOrd
 	if err := s.wos.Create(ctx, w); err != nil {
 		return nil, err
 	}
+
+	// Wave 65 (G2.1) — Provision RADIUS in TEMPORARY at WO creation
+	// per PRD §13. Best-effort: if activation isn't wired or the call
+	// fails, log + continue; ProvisionAndActivate at BAST-approve time
+	// will recover by re-provisioning then promoting.
+	if s.activation != nil {
+		ap, perr := s.crm.ActivationProjectionForOrder(ctx, in.OrderID)
+		if perr == nil && ap != nil {
+			window := proj.TempActivationWindowHrs
+			if window <= 0 {
+				window = 72
+			}
+			if err := s.activation.ProvisionAtWO(ctx, *ap, window); err != nil {
+				// Non-fatal: log via WO history would be ideal; for now
+				// we swallow. The BAST-approve hook recovers.
+				_ = err
+			}
+		}
+	}
+
 	return s.GetWO(ctx, w.ID)
+}
+
+// resolveInstallSLAMinutes returns the per-branch install SLA, walking
+// up the Sub Area → Area → Regional chain when null on a child branch.
+// Falls back to the platform default (1440 min = 24h) when no chain
+// match. Errors silently fall back as well — SLA is best-effort.
+func (s *Service) resolveInstallSLAMinutes(ctx context.Context, branchID *uuid.UUID) int {
+	const fallback = 24 * 60
+	if branchID == nil || s.branchSLA == nil {
+		return fallback
+	}
+	mins, err := s.branchSLA.ResolveInstallSLAMinutes(ctx, *branchID)
+	if err != nil || mins <= 0 {
+		return fallback
+	}
+	return mins
 }
 
 func (s *Service) ListWOs(ctx context.Context, f port.WOListFilter) ([]port.WODetail, int, error) {

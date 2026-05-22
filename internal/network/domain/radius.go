@@ -63,6 +63,7 @@ type RadiusAccount struct {
 	IPAddress           string
 	Status              RadiusStatus
 	TempActivatedAt     *time.Time
+	TempExpiresAt       *time.Time
 	PermActivatedAt     *time.Time
 	SuspendedAt         *time.Time
 	CreatedAt           time.Time
@@ -71,10 +72,15 @@ type RadiusAccount struct {
 
 // ProvisionInput is what callers pass to RadiusClient.Provision to mint
 // a new RADIUS account for a customer at WO-creation time.
+//
+// WindowHours is the PRD §13 `temporary_activation_window_hours` — how
+// long the account stays in TEMPORARY before the janitor sweep
+// auto-deactivates it. Zero = system default (72h).
 type ProvisionInput struct {
 	CustomerID         uuid.UUID
 	Username           string
 	PasswordPlain      string
 	BandwidthProfileID string
 	VLANID             *int
+	WindowHours        int
 }
