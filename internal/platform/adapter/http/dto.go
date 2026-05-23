@@ -168,3 +168,36 @@ type resolvedDTO struct {
 	Override *overrideDTO    `json:"override,omitempty"`
 	Resolved json.RawMessage `json:"resolved,omitempty"`
 }
+
+// =====================================================================
+// Wave 116 — Validation DTOs.
+// =====================================================================
+
+type validationDTO struct {
+	IsValid          bool     `json:"is_valid"`
+	Errors           []string `json:"errors"`
+	Warnings         []string `json:"warnings"`
+	ValidatorVersion string   `json:"validator_version"`
+	ValidatedAt      string   `json:"validated_at,omitempty"`
+	TriggeredBy      string   `json:"triggered_by,omitempty"`
+}
+
+func toValidationDTOFromResult(r domain.ValidationResult) validationDTO {
+	if r.Errors == nil {
+		r.Errors = []string{}
+	}
+	if r.Warnings == nil {
+		r.Warnings = []string{}
+	}
+	return validationDTO{
+		IsValid:          r.IsValid,
+		Errors:           r.Errors,
+		Warnings:         r.Warnings,
+		ValidatorVersion: r.ValidatorVersion,
+	}
+}
+
+type validateAllResponseDTO struct {
+	Total   int `json:"total"`
+	Invalid int `json:"invalid"`
+}

@@ -72,11 +72,11 @@ func main() {
 	// --- Driving adapter (HTTP) ---
 	handler := networkhttp.NewHandler(svc, verifier)
 	priorityHandler := networkhttp.NewPriorityHandler(pool, verifier)
-	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
+	serverCfg := httpserver.DefaultConfig(cfg.HTTPPort)
+	serverCfg.PrometheusServiceName = "network-svc"
+	server := httpserver.New(serverCfg, log)
 	server.SetHealth("network-svc", pool.Ping)
 	// Wave 105 — Prometheus instrumentation + /metrics scrape endpoint.
-	server.Router.Use(httpserver.PrometheusMiddleware("network-svc"))
-	server.Router.Handle("/metrics", httpserver.MetricsHandler())
 	handler.Mount(server.Router)
 	priorityHandler.Mount(server.Router)
 

@@ -20,6 +20,10 @@ type Handler struct {
 	uc         port.UseCase
 	woDispatch port.WODispatchUseCase
 	verifier   *auth.Verifier
+	// Wave 117 — opt-in concrete service for the warehouse-depth surface.
+	// See wave117_handler.go for the route map. nil-safe: when the binary
+	// doesn't wire WithDepth, MountDepth is a no-op.
+	depth DepthService
 }
 
 func NewHandler(uc port.UseCase, verifier *auth.Verifier) *Handler {
@@ -195,6 +199,9 @@ func (h *Handler) Mount(r chi.Router) {
 	// WO dispatch — opt-in surface. Self-skips when WithWODispatch
 	// hasn't been called, so test wirings that don't need it stay clean.
 	h.MountWODispatch(r)
+
+	// Wave 117 — opt-in warehouse-depth surface.
+	h.MountDepth(r)
 }
 
 // DTOs (warehouseDTO, stockItemDTO, assetDTO, transferDTO, …) live in dto.go.

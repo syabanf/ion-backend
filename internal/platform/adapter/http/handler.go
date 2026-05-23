@@ -77,6 +77,20 @@ func (h *Handler) Mount(r chi.Router) {
 			Put("/customer-schemas/{customer_id}/{kind}", h.upsertOverride)
 		r.With(httpserver.RequirePermission("platform.schema_override.manage")).
 			Delete("/customer-schemas/{customer_id}/{kind}", h.deleteOverride)
+
+		// Wave 116 — Content validators
+		//   POST /schemas/{id}/validate         [platform.schema.validate]
+		//   GET  /schemas/{id}/validation       [platform.schema.read]
+		//   POST /schemas/validate-all          [platform.schema.validate]
+		//   GET  /schemas/by-kind/{kind}/active [platform.schema.read]
+		r.With(httpserver.RequirePermission("platform.schema.validate")).
+			Post("/schemas/{id}/validate", h.validateSchema)
+		r.With(httpserver.RequirePermission("platform.schema.read")).
+			Get("/schemas/{id}/validation", h.getLatestValidation)
+		r.With(httpserver.RequirePermission("platform.schema.validate")).
+			Post("/schemas/validate-all", h.validateAllSchemas)
+		r.With(httpserver.RequirePermission("platform.schema.read")).
+			Get("/schemas/by-kind/{kind}/active", h.listActiveByKind)
 	})
 }
 
@@ -404,4 +418,93 @@ func actorUserID(ctx context.Context) *uuid.UUID {
 	}
 	id := c.UserID
 	return &id
+}
+
+// =====================================================================
+// Wave 116 — Validation handlers
+// =====================================================================
+
+// validateSchema triggers the per-kind content validator for the schema
+// id, persists a row in platform.schema_validation_results, and returns
+// the result envelope. 400-class if the schema's kind has no registered
+// validator (we encode that as a successful "no validator" response so
+// admin UIs render gracefully).
+func (h *Handler) validateSchema(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"), "schema")
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	res, err := h.uc.ValidateSchemaContent(r.Context(), id)
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	httpserver.WriteJSON(w, http.StatusOK, toValidationDTOFromResult(*res))
+}
+
+// getLatestValidation returns the most recent validation result for the
+// schema, or 404 if it has never been validated.
+func (h *Handler) getLatestValidation(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"), "schema")
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	row, err := h.uc.LatestValidation(r.Context(), id)
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	out := validationDTO{
+		IsValid:          row.IsValid,
+		Errors:           row.Errors,
+		Warnings:         row.Warnings,
+		ValidatorVersion: row.ValidatorVersion,
+		ValidatedAt:      rfc3339(row.ValidatedAt),
+		TriggeredBy:      row.TriggeredBy,
+	}
+	if out.Errors == nil {
+		out.Errors = []string{}
+	}
+	if out.Warnings == nil {
+		out.Warnings = []string{}
+	}
+	httpserver.WriteJSON(w, http.StatusOK, out)
+}
+
+// validateAllSchemas triggers the sweep across every published row.
+// Returns counts; the per-row results are persisted and surfaced via
+// the get-latest-validation endpoint.
+func (h *Handler) validateAllSchemas(w http.ResponseWriter, r *http.Request) {
+	invalid, total, err := h.uc.ValidateAllPublishedSchemas(r.Context())
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	httpserver.WriteJSON(w, http.StatusOK, validateAllResponseDTO{
+		Total:   total,
+		Invalid: invalid,
+	})
+}
+
+// listActiveByKind returns published schemas of `kind` whose latest
+// validation_results row is is_valid=true. Used by the admin Schema
+// Picker to filter out schemas that haven't been cleaned up yet.
+func (h *Handler) listActiveByKind(w http.ResponseWriter, r *http.Request) {
+	kind, err := domain.ParseSchemaKind(chi.URLParam(r, "kind"))
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	items, err := h.uc.ListActiveByKind(r.Context(), kind)
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	out := make([]schemaDTO, 0, len(items))
+	for _, s := range items {
+		out = append(out, toSchemaDTO(s))
+	}
+	httpserver.WriteJSON(w, http.StatusOK, map[string]any{"items": out})
 }

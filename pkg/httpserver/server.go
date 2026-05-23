@@ -42,6 +42,22 @@ type Config struct {
 	WriteTimeout time.Duration
 	IdleTimeout  time.Duration
 	CORSOrigins  []string
+
+	// PrometheusServiceName, when non-empty, wires the Wave 105 metrics
+	// middleware + /metrics endpoint INSIDE New() before the /healthz
+	// route lands on the mux. Each *-svc binary sets this in its Config
+	// and gets request_duration / requests_total / requests_in_flight
+	// labeled with the right service for free. Empty = no metrics
+	// (back-compat for the older binaries that haven't opted in yet).
+	//
+	// Why this lives on Config instead of a Router.Use() call in main.go:
+	// httpserver.New() registers /healthz at construction time, so any
+	// later Router.Use() panics with chi's "middlewares must be defined
+	// before routes on a mux" rule. Wave 105 originally documented the
+	// Use() pattern but that path only works for binaries where /healthz
+	// hasn't been wired yet — i.e., never since httpserver.New mounts it
+	// itself. Config-driven keeps the ordering invariant inside one file.
+	PrometheusServiceName string
 }
 
 func DefaultConfig(port int) Config {
@@ -97,6 +113,12 @@ func New(cfg Config, log *slog.Logger) *Server {
 	r.Use(RequestLogger(log))
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.Timeout(cfg.WriteTimeout))
+	// Wave 105 — Prometheus metrics mounted inside New() so the Use()
+	// call lands BEFORE the /healthz route is registered (chi forbids
+	// Use after any Handle). Config field is opt-in; empty = skip.
+	if cfg.PrometheusServiceName != "" {
+		r.Use(PrometheusMiddleware(cfg.PrometheusServiceName))
+	}
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
@@ -126,6 +148,12 @@ func New(cfg Config, log *slog.Logger) *Server {
 		},
 		log: log,
 	}
+
+	// Wave 105 — /metrics endpoint mounted alongside /healthz; both are
+	// internal routes that the LB+prom scraper hit. When the Prom
+	// middleware is opted-out (PrometheusServiceName=""), /metrics still
+	// returns the empty registry so scraping doesn't 404.
+	r.Handle("/metrics", MetricsHandler())
 
 	// /healthz reads s.healthName + s.healthPing per request so SetHealth
 	// can wire them at any time after New(). When ping is nil we just

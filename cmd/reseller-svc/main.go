@@ -90,11 +90,11 @@ func main() {
 		NewPlatformHandler(platform, onboarding, wholesale).
 		WithPlatformExtensions(subscribers, invoiceInbox, dashboard)
 
-	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
+	serverCfg := httpserver.DefaultConfig(cfg.HTTPPort)
+	serverCfg.PrometheusServiceName = "reseller-svc"
+	server := httpserver.New(serverCfg, log)
 	server.SetHealth("reseller-svc", pool.Ping)
 	// Wave 105 — Prometheus instrumentation + /metrics scrape endpoint.
-	server.Router.Use(httpserver.PrometheusMiddleware("reseller-svc"))
-	server.Router.Handle("/metrics", httpserver.MetricsHandler())
 	adminHandler.Mount(server.Router)
 	platformHandler.Mount(server.Router)
 

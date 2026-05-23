@@ -15,6 +15,7 @@ import (
 	warehouseconfig "github.com/ion-core/backend/internal/warehouse/adapter/config"
 	warehousehttp "github.com/ion-core/backend/internal/warehouse/adapter/http"
 	warehousepg "github.com/ion-core/backend/internal/warehouse/adapter/postgres"
+	warehouseqr "github.com/ion-core/backend/internal/warehouse/adapter/qr"
 	warehouseusecase "github.com/ion-core/backend/internal/warehouse/usecase"
 	"github.com/ion-core/backend/pkg/auth"
 	"github.com/ion-core/backend/pkg/config"
@@ -68,6 +69,19 @@ func main() {
 	// Wave 89 — product BOM templates.
 	bomRepo := warehousepg.NewProductBOMRepository(pool)
 
+	// Wave 117 — warehouse depth: item categories, cable, consumable,
+	// sub-warehouse, asset location, opname tablet, QR + netdev bridge.
+	itemCatRepo := warehousepg.NewItemCategoryRepository(pool)
+	cableLotRepo := warehousepg.NewCableLotRepository(pool)
+	cableCutRepo := warehousepg.NewCableCutRepository(pool)
+	consBatchRepo := warehousepg.NewConsumableBatchRepository(pool)
+	consLogRepo := warehousepg.NewBatchConsumptionLogRepository(pool)
+	subWHRepo := warehousepg.NewSubWarehouseRepository(pool)
+	assetLocRepo := warehousepg.NewAssetLocationHistoryRepository(pool)
+	opnTabletRepo := warehousepg.NewOpnameTabletSessionRepository(pool)
+	netdevBridge := warehousepg.NewNetdevBridge(pool)
+	qrGen := warehouseqr.New()
+
 	verifier := auth.NewVerifier(cfg.JWTSecret, cfg.JWTIssuer)
 
 	// platform_config reader → FIFO/LIFO default for inventory + asset
@@ -85,15 +99,26 @@ func main() {
 		WithPurchaseOrders(poRepo).
 		WithGoodsReceipts(grRepo).
 		WithAssetRetrofits(retrofitRepo).
-		WithBOMTemplates(bomRepo)
+		WithBOMTemplates(bomRepo).
+		// Wave 117 wiring — opt-in surfaces; nil-safe if any single repo
+		// fails to construct, the corresponding endpoints surface "not
+		// configured" instead of panicking on startup.
+		WithItemCategories(itemCatRepo).
+		WithCable(cableLotRepo, cableCutRepo).
+		WithConsumables(consBatchRepo, consLogRepo).
+		WithSubWarehouses(subWHRepo).
+		WithAssetLocations(assetLocRepo).
+		WithOpnameTablet(opnTabletRepo).
+		WithQRGenerator(qrGen).
+		WithNetdevWriter(netdevBridge)
 
-	handler := warehousehttp.NewHandler(svc, verifier).WithWODispatch(svc)
+	handler := warehousehttp.NewHandler(svc, verifier).WithWODispatch(svc).WithDepth(svc)
 	priorityHandler := warehousehttp.NewPriorityHandler(pool, verifier)
-	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
+	serverCfg := httpserver.DefaultConfig(cfg.HTTPPort)
+	serverCfg.PrometheusServiceName = "warehouse-svc"
+	server := httpserver.New(serverCfg, log)
 	server.SetHealth("warehouse-svc", pool.Ping)
 	// Wave 105 — Prometheus instrumentation + /metrics scrape endpoint.
-	server.Router.Use(httpserver.PrometheusMiddleware("warehouse-svc"))
-	server.Router.Handle("/metrics", httpserver.MetricsHandler())
 	handler.Mount(server.Router)
 	priorityHandler.Mount(server.Router)
 

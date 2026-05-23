@@ -63,10 +63,10 @@ func main() {
 
 	handler := vendorhttp.NewHandler(providerSvc, submissionSvc, metricsSvc, verifier)
 
-	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
+	serverCfg := httpserver.DefaultConfig(cfg.HTTPPort)
+	serverCfg.PrometheusServiceName = "vendor-svc"
+	server := httpserver.New(serverCfg, log)
 	server.SetHealth("vendor-svc", pool.Ping)
-	server.Router.Use(httpserver.PrometheusMiddleware("vendor-svc"))
-	server.Router.Handle("/metrics", httpserver.MetricsHandler())
 	handler.Mount(server.Router)
 
 	// Daily metrics deriver — pulls EWO completions from enterprise.* and

@@ -29,6 +29,12 @@ type Service struct {
 	// loop from Wave 80b's snapshot writer: locks written at lead
 	// conversion are now honored on every subsequent resolve.
 	locks port.CustomerLockReader
+
+	// Wave 116 — Deep schema content validators. Both fields are
+	// optional; without them the service behaves identically to
+	// pre-Wave-116 (no publish gate, no audit row writes).
+	validators        *domain.ValidatorRegistry
+	validationResults port.ValidationResultRepository
 }
 
 func NewService(schemas port.SchemaRepository, overrides port.OverrideRepository) *Service {

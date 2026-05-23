@@ -39,14 +39,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
+	serverCfg := httpserver.DefaultConfig(cfg.HTTPPort)
+	serverCfg.PrometheusServiceName = "api-gateway"
+	server := httpserver.New(serverCfg, log)
 	server.SetHealth("api-gateway", nil) // liveness only — no DB
 
 	// Wave 105 — Prometheus instrumentation + /metrics scrape endpoint.
 	// Gateway-side metrics tell us the user-perceived latency (including
 	// proxy hop) while the per-service /metrics give us the inside view.
-	server.Router.Use(httpserver.PrometheusMiddleware("api-gateway"))
-	server.Router.Handle("/metrics", httpserver.MetricsHandler())
 
 	// Route table: URL prefix → upstream service.
 	// Add more entries as bounded contexts come online.

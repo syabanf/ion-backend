@@ -96,6 +96,28 @@ type SchemaUseCase interface {
 	ResolveSchemaForCustomer(
 		ctx context.Context, customerID uuid.UUID, kind domain.SchemaKind,
 	) (resolved json.RawMessage, schema *domain.SchemaDefinition, override *domain.CustomerSchemaOverride, err error)
+
+	// --- Wave 116 — Validation ---
+	// ValidateSchemaContent runs the registered content validator against
+	// the schema's body, persists a row to platform.schema_validation_results,
+	// and returns the typed result. Returns NotFound if schemaVersionID
+	// doesn't exist.
+	ValidateSchemaContent(ctx context.Context, schemaVersionID uuid.UUID) (*domain.ValidationResult, error)
+
+	// ValidateAllPublishedSchemas sweeps every published schema, runs the
+	// registered validator for each, and writes results. Returns the
+	// number invalid + the total scanned. Designed for the nightly
+	// cron + an admin "validate now" button.
+	ValidateAllPublishedSchemas(ctx context.Context) (invalid int, total int, err error)
+
+	// LatestValidation reads the most recent validation result for the
+	// schema, or nil + NotFound if it has never been validated.
+	LatestValidation(ctx context.Context, schemaVersionID uuid.UUID) (*ValidationResultRow, error)
+
+	// ListActiveByKind returns published schemas of the given kind that
+	// passed validation (latest result is_valid=true). Used by the admin
+	// surface to render "what's live right now for kind X?"
+	ListActiveByKind(ctx context.Context, kind domain.SchemaKind) ([]domain.SchemaDefinition, error)
 }
 
 // =====================================================================
@@ -135,4 +157,32 @@ type OverrideRepository interface {
 // driven adapters.
 type CustomerLockReader interface {
 	LockedVersionFor(ctx context.Context, customerID uuid.UUID, kind domain.SchemaKind) (*uuid.UUID, error)
+}
+
+// =====================================================================
+// Wave 116 — Validation result storage.
+// =====================================================================
+
+// ValidationResultRow is the persisted shape of a single validator run.
+// Mirrors platform.schema_validation_results 1:1.
+type ValidationResultRow struct {
+	ID                uuid.UUID
+	SchemaVersionID   uuid.UUID
+	ValidatedAt       time.Time
+	IsValid           bool
+	Errors            []string
+	Warnings          []string
+	ValidatorVersion  string
+	TriggeredBy       string // 'manual' | 'publish_gate' | 'nightly_sweep'
+}
+
+// ValidationResultRepository persists validator outcomes for audit /
+// admin surfaces. Writes are insert-only — the latest row by
+// validated_at is the canonical "is this schema currently valid?"
+// answer.
+type ValidationResultRepository interface {
+	Insert(ctx context.Context, row *ValidationResultRow) error
+	// LatestForSchema returns the most recent row for schema_version_id,
+	// or NotFound if none yet.
+	LatestForSchema(ctx context.Context, schemaVersionID uuid.UUID) (*ValidationResultRow, error)
 }

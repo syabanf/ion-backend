@@ -14,9 +14,11 @@ import (
 	identityhttp "github.com/ion-core/backend/internal/identity/adapter/http"
 	identitypg "github.com/ion-core/backend/internal/identity/adapter/postgres"
 	"github.com/ion-core/backend/internal/identity/usecase"
+	platformdomain "github.com/ion-core/backend/internal/platform/domain"
 	platformhttp "github.com/ion-core/backend/internal/platform/adapter/http"
 	platformcrm "github.com/ion-core/backend/internal/platform/adapter/crm"
 	platformpg "github.com/ion-core/backend/internal/platform/adapter/postgres"
+	platformcron "github.com/ion-core/backend/internal/platform/cron"
 	platformusecase "github.com/ion-core/backend/internal/platform/usecase"
 	audithttp "github.com/ion-core/backend/pkg/audit/http"
 	auditpg "github.com/ion-core/backend/pkg/audit/postgres"
@@ -86,18 +88,36 @@ func main() {
 	// Wave 82 Tier 2c — customer schema lock reader; resolver honors
 	// crm.customers.locked_*_schema_version_id without callers having
 	// to pass it through ResolveOptions every time.
+	//
+	// Wave 116 — Deep schema content validators. The ValidatorRegistry
+	// dispatches by kind to typed validators (Onboarding / Billing /
+	// Service / Commission / Suspension); results land in
+	// platform.schema_validation_results via the new repo. Publish
+	// route uses the registry as a pre-publish gate.
+	validatorRegistry := platformdomain.NewValidatorRegistry()
+	validationResultsRepo := platformpg.NewValidationResultRepository(pool)
 	platformSvc := platformusecase.NewService(schemaRepo, overrideRepo).
-		WithCustomerLockReader(platformcrm.NewLockReader(pool))
+		WithCustomerLockReader(platformcrm.NewLockReader(pool)).
+		WithValidatorRegistry(validatorRegistry, validationResultsRepo)
 	platformHandler := platformhttp.NewHandler(platformSvc, verifier)
+
+	// Wave 116 — Nightly platform.schema_validation sweep at 04:00 UTC.
+	// Runs ValidateAllPublishedSchemas across all kinds and emits an
+	// audit-level WARN when any schema falls below validation. The
+	// runner spins a goroutine and exits on context cancellation, so it
+	// participates in the normal SIGINT/SIGTERM shutdown.
+	platformCronRunner := platformcron.New(pool, log).
+		WithValidationSweeper(platformSvc)
+	platformCronRunner.Start(ctx)
 
 	// Priority-followup handler — push token registration + HRIS sync.
 	priorityHandler := identityhttp.NewPriorityHandler(pool, verifier)
 
-	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
+	serverCfg := httpserver.DefaultConfig(cfg.HTTPPort)
+	serverCfg.PrometheusServiceName = "identity-svc"
+	server := httpserver.New(serverCfg, log)
 	server.SetHealth("identity-svc", pool.Ping)
 	// Wave 105 — Prometheus instrumentation + /metrics scrape endpoint.
-	server.Router.Use(httpserver.PrometheusMiddleware("identity-svc"))
-	server.Router.Handle("/metrics", httpserver.MetricsHandler())
 	handler.Mount(server.Router)
 	platformHandler.Mount(server.Router)
 	priorityHandler.Mount(server.Router)

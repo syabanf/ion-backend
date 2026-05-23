@@ -109,6 +109,9 @@ func (h *Handler) Mount(r chi.Router) {
 		r.With(httpserver.RequirePermission("identity.permission.read")).
 			Get("/permissions", h.listPermissions)
 
+		// Wave 118 — composite permission bundles for the role-builder UX.
+		h.mountPermissionBundles(r)
+
 		// M5 r3 — Availability (HRIS stub)
 		r.With(httpserver.RequirePermission("identity.availability.read")).
 			Get("/availability/roster", h.listRoster)

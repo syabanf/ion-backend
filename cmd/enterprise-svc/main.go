@@ -18,6 +18,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/go-chi/chi/v5"
+
 	enterprisehttp "github.com/ion-core/backend/internal/enterprise/adapter/http"
 	enterprisepg "github.com/ion-core/backend/internal/enterprise/adapter/postgres"
 	enterprisetax "github.com/ion-core/backend/internal/enterprise/adapter/tax"
@@ -213,40 +215,35 @@ func main() {
 	).WithAudit(auditWriter)
 	mobileHandler := enterprisehttp.NewMobileEWOHandler(mobileSvc, verifier)
 
-	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
+	serverCfg := httpserver.DefaultConfig(cfg.HTTPPort)
+	serverCfg.PrometheusServiceName = "enterprise-svc"
+	server := httpserver.New(serverCfg, log)
 	server.SetHealth("enterprise-svc", pool.Ping)
 
 	// Wave 97 — block suspended actors before any enterprise handler
-	// runs. The middleware is a no-op for unauthenticated routes
-	// (/healthz, etc.) because it short-circuits when no claims are
-	// attached, so it's safe to mount at the router level. We sit it
-	// BEFORE the handler mounts so all parallel route additions
-	// (Wave 95 customer_po + IC-PO, future waves) inherit the check
-	// automatically without per-handler wiring.
-	server.Router.Use(enterprisehttp.RequireActiveActor(verifier))
+	// runs. Wrapped in a chi Group so RequireActiveActor sits on a
+	// sub-mux that doesn't conflict with httpserver.New's already-
+	// registered /healthz + /metrics (chi forbids parent.Use after any
+	// parent.Handle). All handler mounts go on the scoped router so
+	// future wave additions inherit the check automatically.
+	server.Router.Group(func(r chi.Router) {
+		r.Use(enterprisehttp.RequireActiveActor(verifier))
 
-	// Wave 105 — Prometheus instrumentation. Placed after the
-	// authz middleware so the in-flight gauge / latency histogram
-	// reflect actually-served requests (suspended actors short-
-	// circuit upstream and don't reach the handler). /metrics is
-	// mounted next to /healthz — scraped by ops Prometheus.
-	server.Router.Use(httpserver.PrometheusMiddleware("enterprise-svc"))
-	server.Router.Handle("/metrics", httpserver.MetricsHandler())
-
-	handler.Mount(server.Router)
-	boqHandler.Mount(server.Router)
-	quotationHandler.Mount(server.Router)
-	negotiationHandler.Mount(server.Router)
-	financeHandler.Mount(server.Router)
-	notificationHandler.Mount(server.Router)
-	preLaunchHandler.Mount(server.Router)
-	phase2Handler.Mount(server.Router)
-	holdingHandler.Mount(server.Router)
-	taxHandler.Mount(server.Router)
-	customerPOHandler.Mount(server.Router)
-	icPOHandler.Mount(server.Router)
-	tlSchedulingHandler.Mount(server.Router)
-	mobileHandler.Mount(server.Router)
+		handler.Mount(r)
+		boqHandler.Mount(r)
+		quotationHandler.Mount(r)
+		negotiationHandler.Mount(r)
+		financeHandler.Mount(r)
+		notificationHandler.Mount(r)
+		preLaunchHandler.Mount(r)
+		phase2Handler.Mount(r)
+		holdingHandler.Mount(r)
+		taxHandler.Mount(r)
+		customerPOHandler.Mount(r)
+		icPOHandler.Mount(r)
+		tlSchedulingHandler.Mount(r)
+		mobileHandler.Mount(r)
+	})
 
 	// Push-notification dispatcher. Stub provider until FCM credentials
 	// land (docs/backlog.md §FCM/APNS). The milestone-invoicer fans

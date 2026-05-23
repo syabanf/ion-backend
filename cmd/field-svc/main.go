@@ -233,11 +233,11 @@ func main() {
 	handler := fieldhttp.NewHandler(svc, verifier)
 	uploadHandler := uploadshttp.NewHandler(uploadSvc, localStore, verifier)
 
-	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
+	serverCfg := httpserver.DefaultConfig(cfg.HTTPPort)
+	serverCfg.PrometheusServiceName = "field-svc"
+	server := httpserver.New(serverCfg, log)
 	server.SetHealth("field-svc", pool.Ping)
 	// Wave 105 — Prometheus instrumentation + /metrics scrape endpoint.
-	server.Router.Use(httpserver.PrometheusMiddleware("field-svc"))
-	server.Router.Handle("/metrics", httpserver.MetricsHandler())
 	handler.Mount(server.Router)
 	uploadHandler.Mount(server.Router)
 

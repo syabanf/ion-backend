@@ -53,7 +53,36 @@ type Service struct {
 	// Wave 89 — per-product BOM templates. The dispatch flow (later)
 	// pre-fills its BOM lines from the active template here.
 	bomTemplates port.ProductBOMTemplateRepository
-	log          *slog.Logger
+
+	// Wave 117 — warehouse depth (item categories, cable lots, consumable
+	// batches, sub-warehouses, asset location history, opname tablet sync,
+	// QR codes, typed dispatch bridge to netdev). All opt-in via With*
+	// builders; nil-safe via err*NotConfigured surfaces.
+	itemCategories       port.ItemCategoryRepository
+	cableLots            port.CableLotRepository
+	cableCuts            port.CableCutRepository
+	consumableBatches    port.ConsumableBatchRepository
+	consumptionLogs      port.BatchConsumptionLogRepository
+	subWarehouses        port.SubWarehouseRepository
+	assetLocations       port.AssetLocationHistoryRepository
+	opnameTabletSessions port.OpnameTabletSessionRepository
+	qrGenerator          port.QRCodeGenerator
+	netdevWriter         port.NetdevDeviceWriter
+
+	log *slog.Logger
+}
+
+// auditf emits a structured audit log line for typed warehouse-depth
+// operations. Kept as a thin helper so cable cut / consumable consume /
+// sub-warehouse transfer all share the same shape and any future audit-
+// stream switch (e.g. Kafka) only changes one place.
+func (s *Service) auditf(_ context.Context, action, format string, args ...any) {
+	if s.log == nil {
+		return
+	}
+	s.log.Info("warehouse_audit",
+		"action", action,
+		"detail", fmt.Sprintf(format, args...))
 }
 
 // WithValuation attaches the platform_config reader so ListAssets +
