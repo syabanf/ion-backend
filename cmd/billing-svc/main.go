@@ -29,6 +29,7 @@ import (
 	networkradius "github.com/ion-core/backend/internal/network/adapter/radius"
 	platformpg "github.com/ion-core/backend/internal/platform/adapter/postgres"
 	platformusecase "github.com/ion-core/backend/internal/platform/usecase"
+	auditpg "github.com/ion-core/backend/pkg/audit/postgres"
 	"github.com/ion-core/backend/pkg/auth"
 	"github.com/ion-core/backend/pkg/config"
 	"github.com/ion-core/backend/pkg/database"
@@ -65,7 +66,7 @@ func main() {
 	commissionRepo := billingpg.NewCommissionRepository(pool)
 	crmGW := billingcrm.New(pool)
 	// In-process RADIUS client for suspend/restore. Round-4 swaps to HTTP.
-	radiusClient := networkradius.NewLocalClient(pool, log)
+	radiusClient := networkradius.NewLocalClient(pool, log).WithAudit(auditpg.NewWriter(pool))
 	netGW := billingnet.New(radiusClient)
 
 	// M6 r3 — termination + referral repos + field gateway.

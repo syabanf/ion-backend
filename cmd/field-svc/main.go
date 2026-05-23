@@ -89,7 +89,7 @@ func main() {
 	portRepo := networkpg.NewPortRepository(pool)
 	coverageRepo := networkpg.NewCoverageRepository(pool)
 	impactRepo := networkpg.NewImpactRepository(pool)
-	radiusClient := networkradius.NewLocalClient(pool, log)
+	radiusClient := networkradius.NewLocalClient(pool, log).WithAudit(auditpg.NewWriter(pool))
 	configReader := platformconfig.New(pool)
 	netSvc := networkusecase.NewService(
 		nodeTypeRepo, nodeRepo, portRepo,

@@ -30,17 +30,34 @@ import (
 
 	"github.com/ion-core/backend/internal/network/domain"
 	"github.com/ion-core/backend/internal/network/port"
-	derrors "github.com/ion-core/backend/pkg/errors"
+	"github.com/ion-core/backend/pkg/audit"
 	"github.com/ion-core/backend/pkg/auth"
+	derrors "github.com/ion-core/backend/pkg/errors"
 )
 
 type LocalRadiusClient struct {
-	pool *pgxpool.Pool
-	log  *slog.Logger
+	pool   *pgxpool.Pool
+	log    *slog.Logger
+	auditW audit.Writer // Wave 81 (TC-RAD-021) — defaults to Nop; mutating lifecycle methods emit through it.
 }
 
 func NewLocalClient(pool *pgxpool.Pool, log *slog.Logger) *LocalRadiusClient {
-	return &LocalRadiusClient{pool: pool, log: log.With("component", "radius_local")}
+	return &LocalRadiusClient{
+		pool:   pool,
+		log:    log.With("component", "radius_local"),
+		auditW: audit.Nop{},
+	}
+}
+
+// WithAudit attaches the audit writer. Wave 81 (TC-RAD-021) — every
+// state change (Provision / Promote / Suspend / Restore / Deactivate)
+// emits a row through this writer so the operations audit trail
+// captures who/when across the RADIUS lifecycle.
+func (c *LocalRadiusClient) WithAudit(w audit.Writer) *LocalRadiusClient {
+	if w != nil {
+		c.auditW = w
+	}
+	return c
 }
 
 var _ port.RadiusClient = (*LocalRadiusClient)(nil)
@@ -102,6 +119,18 @@ func (c *LocalRadiusClient) Provision(ctx context.Context, in domain.ProvisionIn
 	}
 	c.log.Info("radius account provisioned (TEMPORARY)",
 		"customer_id", in.CustomerID, "username", in.Username, "window_hours", window)
+	// Wave 81 (TC-RAD-021) — provisioning crosses a security
+	// boundary (network access granted), so we always audit even
+	// for the happy path. UserID is left nil here because the
+	// adapter can't see the actor; HTTP handlers that wrap this
+	// can layer their own audit row with the actor when needed.
+	audit.SafeWrite(ctx, c.auditW, audit.Entry{
+		Module:     "network",
+		RecordType: "radius_account",
+		RecordID:   in.CustomerID.String(),
+		After:      "status=temporary username=" + in.Username,
+		Reason:     "radius_provisioned",
+	})
 	return c.Find(ctx, in.CustomerID)
 }
 
@@ -146,6 +175,17 @@ func (c *LocalRadiusClient) transition(ctx context.Context, customerID uuid.UUID
 		return nil, derrors.NotFound("radius.not_found", "radius account not found")
 	}
 	c.log.Info("radius status transition", "customer_id", customerID, "to", string(to))
+	// Wave 81 (TC-RAD-021) — every lifecycle transition is auditable.
+	// FieldChanged="status" lets the admin viewer collapse multiple
+	// rows into a single "status timeline" widget per account.
+	audit.SafeWrite(ctx, c.auditW, audit.Entry{
+		Module:       "network",
+		RecordType:   "radius_account",
+		RecordID:     customerID.String(),
+		FieldChanged: "status",
+		After:        string(to),
+		Reason:       "radius_status_transition",
+	})
 	return c.Find(ctx, customerID)
 }
 

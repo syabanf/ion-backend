@@ -336,6 +336,21 @@ type SalesUserGateway interface {
 	// SalesTypeFor returns the sales_type ('broadband'|'enterprise'|'both')
 	// of the given user. Returns NotFound when the user is not a sales rep.
 	SalesTypeFor(ctx context.Context, userID uuid.UUID) (string, error)
+
+	// FindForTerritory picks a sales rep to auto-assign a lead in the
+	// given branch (Wave 81 — TC-CRM-011). leadType is one of
+	// 'broadband'|'enterprise'; a sales rep matches when their
+	// sales_type equals it OR equals 'both'.
+	//
+	// nil result + nil error means no eligible rep was found; the
+	// caller leaves SalesID nil so the lead lands in the unassigned
+	// queue. nil error/non-nil result returns the chosen user_id.
+	//
+	// Selection strategy: least-loaded (fewest non-terminal leads in
+	// the last 30 days), deterministic tie-break by user_id. This
+	// keeps lead distribution fair without needing a dedicated
+	// scheduling service.
+	FindForTerritory(ctx context.Context, branchID uuid.UUID, leadType string) (*uuid.UUID, error)
 }
 
 // =====================================================================

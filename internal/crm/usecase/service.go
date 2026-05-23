@@ -369,6 +369,25 @@ func (s *Service) CreateLead(ctx context.Context, in port.CreateLeadInput) (*por
 		}
 	}
 
+	// Wave 81 (TC-CRM-011) — territory-based auto-assign. When the
+	// caller didn't pick a sales rep AND coverage resolved a branch,
+	// ask the gateway for the least-loaded eligible rep in that
+	// territory. nil result is a soft fallback: the lead lands in the
+	// unassigned queue for a sales manager to triage. We only auto-
+	// assign when SalesID is nil so explicit "assign to X" calls are
+	// never overridden.
+	if l.SalesID == nil && l.BranchID != nil && s.salesUser != nil {
+		picked, err := s.salesUser.FindForTerritory(ctx, *l.BranchID, string(l.LeadType))
+		if err == nil && picked != nil {
+			l.SalesID = picked
+			// Capture the rep's sales_type for audit symmetry with
+			// the explicit-assign branch above.
+			if stype, terr := s.salesUser.SalesTypeFor(ctx, *picked); terr == nil {
+				l.SalesTypeAtCreate = stype
+			}
+		}
+	}
+
 	// Seed the checklist. M4 r2 reads from the active onboarding schema;
 	// when the schema repo isn't wired (r1 callers) we fall back to the
 	// hardcoded default. The lead records which schema was used.

@@ -18,6 +18,7 @@ import (
 	networkpg "github.com/ion-core/backend/internal/network/adapter/postgres"
 	networkradius "github.com/ion-core/backend/internal/network/adapter/radius"
 	networkusecase "github.com/ion-core/backend/internal/network/usecase"
+	auditpg "github.com/ion-core/backend/pkg/audit/postgres"
 	"github.com/ion-core/backend/pkg/auth"
 	"github.com/ion-core/backend/pkg/config"
 	"github.com/ion-core/backend/pkg/database"
@@ -52,7 +53,10 @@ func main() {
 	portRepo := networkpg.NewPortRepository(pool)
 	coverageRepo := networkpg.NewCoverageRepository(pool)
 	impactRepo := networkpg.NewImpactRepository(pool)
-	radiusClient := networkradius.NewLocalClient(pool, log)
+	// Wave 81 (TC-RAD-021) — wire audit writer into the RADIUS
+	// client so every state transition (provision / promote / suspend
+	// / restore / deactivate) lands a row in identity.audit_logs.
+	radiusClient := networkradius.NewLocalClient(pool, log).WithAudit(auditpg.NewWriter(pool))
 	configReader := platformconfig.New(pool)
 
 	// JWT verifier — identity-svc issued the token; we just validate locally.
