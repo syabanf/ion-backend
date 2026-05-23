@@ -15,6 +15,7 @@ import (
 	identitypg "github.com/ion-core/backend/internal/identity/adapter/postgres"
 	"github.com/ion-core/backend/internal/identity/usecase"
 	platformhttp "github.com/ion-core/backend/internal/platform/adapter/http"
+	platformcrm "github.com/ion-core/backend/internal/platform/adapter/crm"
 	platformpg "github.com/ion-core/backend/internal/platform/adapter/postgres"
 	platformusecase "github.com/ion-core/backend/internal/platform/usecase"
 	auditpg "github.com/ion-core/backend/pkg/audit/postgres"
@@ -81,7 +82,11 @@ func main() {
 	// /api/platform → identity-svc.
 	schemaRepo := platformpg.NewSchemaRepository(pool)
 	overrideRepo := platformpg.NewOverrideRepository(pool)
-	platformSvc := platformusecase.NewService(schemaRepo, overrideRepo)
+	// Wave 82 Tier 2c — customer schema lock reader; resolver honors
+	// crm.customers.locked_*_schema_version_id without callers having
+	// to pass it through ResolveOptions every time.
+	platformSvc := platformusecase.NewService(schemaRepo, overrideRepo).
+		WithCustomerLockReader(platformcrm.NewLockReader(pool))
 	platformHandler := platformhttp.NewHandler(platformSvc, verifier)
 
 	// Priority-followup handler — push token registration + HRIS sync.

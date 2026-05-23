@@ -17,6 +17,20 @@ type Policy struct {
 	NotifyCustomerDaysBefore   int
 	UpdatedBy                  *uuid.UUID
 	UpdatedAt                  time.Time
+
+	// Wave 82 Tier 2b — schema-driven cycle config.
+	//
+	// CycleAnchorDay = 0 → anchor on activated_at's day-of-month
+	//                      (anniversary; the default).
+	// CycleAnchorDay = 1..31 → fixed-day calendar billing (the customer
+	//                      bills on the same day of the month every
+	//                      cycle, regardless of activation day). Day
+	//                      values past month-end clamp via `anchor()`.
+	// DueOffsetDays = 7 by default — distance from period start to
+	//                      the invoice due_date. Operators can tighten
+	//                      this for high-risk customers.
+	CycleAnchorDay int
+	DueOffsetDays  int
 }
 
 // CycleStatus mirrors the billing_cycles CHECK.

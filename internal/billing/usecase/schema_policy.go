@@ -211,6 +211,16 @@ func (sp *schemaPolicyResolver) resolvedPolicyFor(
 		legacy.TerminateAfterSuspendedDays)
 	out.NotifyCustomerDaysBefore = readInt(body, "notify_customer_days_before",
 		legacy.NotifyCustomerDaysBefore)
+	// Wave 82 Tier 2b — schema-driven cycle config.
+	//   * cycle_anchor_day: 0 (anniversary, the default) or 1..31
+	//     (fixed-day calendar billing). Day > 31 is clamped at the
+	//     scheduler's anchor() helper, not here, so the resolver
+	//     stays a thin reader.
+	//   * due_offset_days: net-terms offset from period start to
+	//     the invoice's due_date. Falls back to legacy.DueOffsetDays
+	//     (zero → tickRecurring keeps using its 7-day default).
+	out.CycleAnchorDay = readInt(body, "cycle_anchor_day", legacy.CycleAnchorDay)
+	out.DueOffsetDays = readInt(body, "due_offset_days", legacy.DueOffsetDays)
 	return &out
 }
 

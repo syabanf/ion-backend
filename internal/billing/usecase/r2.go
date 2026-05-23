@@ -163,15 +163,29 @@ func (s *Service) RunBillingTick(ctx context.Context, now time.Time) (*port.Tick
 // Month-end overflow (e.g. activated on the 31st) is clamped to the
 // last day of the target month.
 func anniversaryPeriod(now time.Time, activatedAt *time.Time) (time.Time, time.Time) {
-	if activatedAt == nil {
-		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-		end := start.AddDate(0, 1, 0).Add(-24 * time.Hour)
-		return start, end
+	return cyclePeriod(now, activatedAt, 0)
+}
+
+// cyclePeriod is the schema-driven generalization (Wave 82 Tier 2b).
+// anchorDay == 0 → anniversary cadence (legacy default, computed from
+// activatedAt's day-of-month).
+// anchorDay 1..31 → fixed-day calendar billing; every cycle anchors on
+// that day regardless of activation. Out-of-range months get clamped
+// by anchor() (e.g. day=31 in February becomes the 28th/29th).
+func cyclePeriod(now time.Time, activatedAt *time.Time, anchorDay int) (time.Time, time.Time) {
+	day := anchorDay
+	if day <= 0 {
+		// Anniversary mode (legacy) — anchor on activatedAt's day.
+		if activatedAt == nil {
+			start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+			end := start.AddDate(0, 1, 0).Add(-24 * time.Hour)
+			return start, end
+		}
+		day = activatedAt.Day()
 	}
-	day := activatedAt.Day()
 	candidate := anchor(now.Year(), int(now.Month()), day)
 	if candidate.After(now) {
-		// Anniversary hasn't hit this calendar month yet; the active
+		// Anchor hasn't hit this calendar month yet; the active
 		// period is the previous month's anchor → this one's anchor.
 		candidate = anchor(now.Year(), int(now.Month())-1, day)
 	}
@@ -209,7 +223,11 @@ func (s *Service) tickRecurring(ctx context.Context, now time.Time, rep *port.Ti
 			continue
 		}
 
-		periodStart, periodEnd := anniversaryPeriod(now, o.ActivatedAt)
+		// Wave 82 Tier 2b — resolve cycle config per-customer so a
+		// schema override (cycle_anchor_day) takes effect. Falls back
+		// to anniversary cadence when no override.
+		custCycle := s.resolvedBillingPolicy(ctx, o.CustomerID, &domain.Policy{})
+		periodStart, periodEnd := cyclePeriod(now, o.ActivatedAt, custCycle.CycleAnchorDay)
 
 		// Idempotency: skip if we already generated a cycle for this
 		// (customer, period_start).
@@ -223,7 +241,12 @@ func (s *Service) tickRecurring(ctx context.Context, now time.Time, rep *port.Ti
 		}
 
 		// Build the recurring invoice via the existing CreateInvoice path.
-		due := periodStart.AddDate(0, 0, 7) // 7-day net terms
+		// Wave 82 Tier 2b — schema-driven net terms; 7 is the legacy default.
+		dueDays := custCycle.DueOffsetDays
+		if dueDays <= 0 {
+			dueDays = 7
+		}
+		due := periodStart.AddDate(0, 0, dueDays)
 		oid := o.OrderID
 		// Phase 1B (TC-billing-addon-merge) — fold active addons onto the
 		// same invoice so the customer sees one bill rather than one per

@@ -27,6 +27,7 @@ import (
 	billingpg "github.com/ion-core/backend/internal/billing/adapter/postgres"
 	billingusecase "github.com/ion-core/backend/internal/billing/usecase"
 	networkradius "github.com/ion-core/backend/internal/network/adapter/radius"
+	platformcrm "github.com/ion-core/backend/internal/platform/adapter/crm"
 	platformpg "github.com/ion-core/backend/internal/platform/adapter/postgres"
 	platformusecase "github.com/ion-core/backend/internal/platform/usecase"
 	auditpg "github.com/ion-core/backend/pkg/audit/postgres"
@@ -87,7 +88,10 @@ func main() {
 	// path needs to change.
 	platformSchemaRepo := platformpg.NewSchemaRepository(pool)
 	platformOverrideRepo := platformpg.NewOverrideRepository(pool)
-	platformSvc := platformusecase.NewService(platformSchemaRepo, platformOverrideRepo)
+	// Wave 82 Tier 2c — auto-load customer schema version lock so every
+	// dunning/recurring tick honors the Wave 80b snapshot.
+	platformSvc := platformusecase.NewService(platformSchemaRepo, platformOverrideRepo).
+		WithCustomerLockReader(platformcrm.NewLockReader(pool))
 	schemaResolver := platformusecase.NewResolver(platformSvc)
 
 	svc := billingusecase.NewService(invoiceRepo, paymentRepo).

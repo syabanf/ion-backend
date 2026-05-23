@@ -29,6 +29,7 @@ import (
 	networkpg "github.com/ion-core/backend/internal/network/adapter/postgres"
 	networkradius "github.com/ion-core/backend/internal/network/adapter/radius"
 	networkusecase "github.com/ion-core/backend/internal/network/usecase"
+	platformcrm "github.com/ion-core/backend/internal/platform/adapter/crm"
 	platformpg "github.com/ion-core/backend/internal/platform/adapter/postgres"
 	platformusecase "github.com/ion-core/backend/internal/platform/usecase"
 	auditpg "github.com/ion-core/backend/pkg/audit/postgres"
@@ -107,7 +108,13 @@ func main() {
 	// (single DB today); HTTP-backed implementation later.
 	platformSchemaRepo := platformpg.NewSchemaRepository(pool)
 	platformOverrideRepo := platformpg.NewOverrideRepository(pool)
-	platformSvc := platformusecase.NewService(platformSchemaRepo, platformOverrideRepo)
+	// Wave 82 Tier 2c — auto-load customer lock so every downstream
+	// kind (billing / commission / service / suspension) honors the
+	// Wave 80b snapshot without each caller having to thread the lock
+	// id through ResolveOptions.
+	platformLockReader := platformcrm.NewLockReader(pool)
+	platformSvc := platformusecase.NewService(platformSchemaRepo, platformOverrideRepo).
+		WithCustomerLockReader(platformLockReader)
 	schemaResolver := platformusecase.NewResolver(platformSvc)
 
 	// In-process billing usecase so converting a lead auto-creates the

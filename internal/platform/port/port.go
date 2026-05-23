@@ -124,3 +124,15 @@ type OverrideRepository interface {
 	ListByCustomer(ctx context.Context, customerID uuid.UUID) ([]domain.CustomerSchemaOverride, error)
 	Delete(ctx context.Context, customerID uuid.UUID, kind domain.SchemaKind) error
 }
+
+// CustomerLockReader (Wave 82 Tier 2c) — read crm.customers.locked_<kind>_schema_version_id
+// for a customer. Returns (nil, nil) when no lock is set; (nil, err)
+// only on infrastructure failure.
+//
+// Lives in the platform port because the platform resolver consumes it,
+// but the implementation reads from crm.customers (cross-context). The
+// adapter lives in internal/platform/adapter/crm/ — sibling to other
+// driven adapters.
+type CustomerLockReader interface {
+	LockedVersionFor(ctx context.Context, customerID uuid.UUID, kind domain.SchemaKind) (*uuid.UUID, error)
+}

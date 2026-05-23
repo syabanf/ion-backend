@@ -21,10 +21,29 @@ import (
 type Service struct {
 	schemas   port.SchemaRepository
 	overrides port.OverrideRepository
+
+	// Wave 82 Tier 2c — optional reader of crm.customers.locked_*_schema_version_id.
+	// When wired, ResolveSchemaForCustomerWith automatically loads the
+	// customer's locked version for the requested kind whenever the
+	// caller didn't pass an explicit LockedVersionID. This closes the
+	// loop from Wave 80b's snapshot writer: locks written at lead
+	// conversion are now honored on every subsequent resolve.
+	locks port.CustomerLockReader
 }
 
 func NewService(schemas port.SchemaRepository, overrides port.OverrideRepository) *Service {
 	return &Service{schemas: schemas, overrides: overrides}
+}
+
+// WithCustomerLockReader enables the auto-load of customer schema
+// version locks. Optional. Without it, the resolver behaves exactly
+// as it did pre-Wave-82: locks are only honored when a caller passes
+// LockedVersionID explicitly via ResolveOptions.
+func (s *Service) WithCustomerLockReader(r port.CustomerLockReader) *Service {
+	if r != nil {
+		s.locks = r
+	}
+	return s
 }
 
 var _ port.SchemaUseCase = (*Service)(nil)
@@ -247,6 +266,19 @@ func (s *Service) ResolveSchemaForCustomerWith(
 			"schema.kind_invalid",
 			"kind must be one of: billing, commission, suspension, service",
 		)
+	}
+
+	// Wave 82 Tier 2c — auto-load the customer's locked schema version
+	// when the caller didn't supply one. This closes the loop from
+	// Wave 80b's snapshot writer: locks written at lead conversion are
+	// now honored on every subsequent resolve, regardless of which
+	// caller invokes us. Reader is optional; without it we behave as
+	// before. Lookup errors are non-fatal — we fall through to the
+	// normal resolution chain.
+	if s.locks != nil && opts.LockedVersionID == nil && customerID != uuid.Nil {
+		if locked, lerr := s.locks.LockedVersionFor(ctx, customerID, kind); lerr == nil && locked != nil {
+			opts.LockedVersionID = locked
+		}
 	}
 
 	var (
