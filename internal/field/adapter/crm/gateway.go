@@ -81,6 +81,16 @@ func (g *Gateway) OrderForWO(ctx context.Context, orderID uuid.UUID) (*port.Orde
 					proj.ProductName = p.Name
 					proj.SpeedMbps = p.SpeedMbps
 					proj.TempActivationWindowHrs = p.TempActivationWindowHrs
+					// Wave 84 — propagate the product reference + the
+					// service schema slot so field-svc can pin them on
+					// the new WO row. Both may stay nil when the
+					// product hasn't been linked to a schema yet.
+					pid := p.ID
+					proj.ProductID = &pid
+					if p.ServiceSchemaID != nil {
+						sid := *p.ServiceSchemaID
+						proj.ServiceSchemaID = &sid
+					}
 					break
 				}
 			}

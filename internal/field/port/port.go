@@ -36,6 +36,12 @@ type OrderProjection struct {
 	ProductName             string
 	SpeedMbps               int
 	TempActivationWindowHrs int
+
+	// Wave 84 (TC-WO-011) — product reference + pinned service
+	// schema, propagated through to the new WO row. Either may be
+	// nil for legacy orders or products without a schema slot.
+	ProductID       *uuid.UUID
+	ServiceSchemaID *uuid.UUID
 }
 
 // ActivationProjection is what the activation hook needs when an

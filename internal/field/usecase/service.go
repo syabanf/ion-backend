@@ -183,6 +183,18 @@ func (s *Service) CreateWOFromOrder(ctx context.Context, in port.CreateWOFromOrd
 		return nil, err
 	}
 	w.BranchID = proj.BranchID
+	// Wave 84 (TC-WO-011) — propagate product reference + the pinned
+	// service schema so the WO row carries enough state to drive a
+	// per-product (or schema-derived) checklist lookup. Both stay nil
+	// when the product / schema isn't set on the order's product.
+	if proj.ProductID != nil {
+		pid := *proj.ProductID
+		w.ProductID = &pid
+	}
+	if proj.ServiceSchemaID != nil {
+		sid := *proj.ServiceSchemaID
+		w.ServiceSchemaID = &sid
+	}
 	if in.Priority != "" {
 		w.Priority = in.Priority
 	}

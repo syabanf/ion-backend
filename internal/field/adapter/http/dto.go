@@ -52,6 +52,12 @@ type woDTO struct {
 	IsCrossArea        bool    `json:"is_cross_area"`
 	Notes              string  `json:"notes,omitempty"`
 	CreatedAt          string  `json:"created_at"`
+
+	// Wave 84 (TC-WO-011) — the customer's product + the pinned
+	// service-schema version at WO creation. Both omitempty so
+	// existing clients without these fields keep working.
+	ProductID       *string `json:"product_id,omitempty"`
+	ServiceSchemaID *string `json:"service_schema_id,omitempty"`
 }
 
 func toWODTO(d port.WODetail) woDTO {
@@ -96,6 +102,14 @@ func toWODTO(d port.WODetail) woDTO {
 	if w.TeamLeaderID != nil {
 		s := w.TeamLeaderID.String()
 		out.TeamLeaderID = &s
+	}
+	if w.ProductID != nil {
+		s := w.ProductID.String()
+		out.ProductID = &s
+	}
+	if w.ServiceSchemaID != nil {
+		s := w.ServiceSchemaID.String()
+		out.ServiceSchemaID = &s
 	}
 	return out
 }

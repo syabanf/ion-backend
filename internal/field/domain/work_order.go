@@ -114,6 +114,15 @@ type WorkOrder struct {
 	CreatedBy          *uuid.UUID
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+
+	// Wave 84 (TC-WO-011) — per-customer product + pinned service
+	// schema. Both nullable so legacy WOs continue to load; new WOs
+	// created from an order stamp both via the CRM projection.
+	// ProductID is the customer's product at install time; if the
+	// product later mutates its slot, the WO keeps the original
+	// snapshot via ServiceSchemaID.
+	ProductID       *uuid.UUID
+	ServiceSchemaID *uuid.UUID
 }
 
 // NewInstallationWO builds a WO from an order. The service supplies

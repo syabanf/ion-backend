@@ -28,6 +28,8 @@ var _ port.WORepository = (*WORepository)(nil)
 //
 // We pull team name + team-leader name via LEFT JOINs so the WO list
 // renders without N+1 lookups. Branch is pulled the same way.
+// Wave 84 (TC-WO-011) — woSelect now also returns product_id +
+// service_schema_id. Both nullable; legacy rows scan as nil.
 const woSelect = `
 SELECT w.id, w.wo_number, w.order_id, w.customer_id, w.wo_type,
        w.product_type, COALESCE(w.maintenance_subtype,''),
@@ -35,6 +37,7 @@ SELECT w.id, w.wo_number, w.order_id, w.customer_id, w.wo_type,
        w.scheduled_date, w.sla_due_at, w.team_id, w.team_leader_id,
        w.is_emergency, w.is_cross_area, COALESCE(w.notes,''),
        w.created_by, w.created_at, w.updated_at,
+       w.product_id, w.service_schema_id,
        COALESCE(b.name,'') AS branch_name,
        COALESCE(b.code,'') AS branch_code,
        COALESCE(t.name,'') AS team_name,
@@ -46,18 +49,22 @@ LEFT JOIN identity.users u    ON u.id = w.team_leader_id
 `
 
 func (r *WORepository) Create(ctx context.Context, w *domain.WorkOrder) error {
+	// Wave 84 — INSERT now carries product_id + service_schema_id.
+	// Both null-safe via the pgx mapping of *uuid.UUID.
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO field.work_orders (
 			id, wo_number, order_id, customer_id, wo_type,
 			product_type, maintenance_subtype, address, branch_id,
 			priority, status, scheduled_date, sla_due_at, team_id, team_leader_id,
-			is_emergency, is_cross_area, notes, created_by, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)
+			is_emergency, is_cross_area, notes, created_by, created_at, updated_at,
+			product_id, service_schema_id
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22)
 	`,
 		w.ID, w.WONumber, w.OrderID, w.CustomerID, string(w.WOType),
 		w.ProductType, nullableString(w.MaintenanceSubtype), w.Address, w.BranchID,
 		string(w.Priority), string(w.Status), w.ScheduledDate, w.SLADueAt, w.TeamID, w.TeamLeaderID,
 		w.IsEmergency, w.IsCrossArea, nullableString(w.Notes), w.CreatedBy, w.CreatedAt,
+		w.ProductID, w.ServiceSchemaID,
 	)
 	return mapDBError(err, "wo.create", "create work order")
 }
@@ -179,6 +186,7 @@ func scanWOHeader(row pgx.Row) (*port.WODetail, error) {
 		&w.ScheduledDate, &w.SLADueAt, &w.TeamID, &w.TeamLeaderID,
 		&w.IsEmergency, &w.IsCrossArea, &w.Notes,
 		&w.CreatedBy, &w.CreatedAt, &w.UpdatedAt,
+		&w.ProductID, &w.ServiceSchemaID,
 		&out.BranchName, &out.BranchCode,
 		&out.TeamName, &out.TeamLeaderName,
 	)
