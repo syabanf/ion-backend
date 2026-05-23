@@ -20,9 +20,24 @@ import (
 
 	enterprisehttp "github.com/ion-core/backend/internal/enterprise/adapter/http"
 	enterprisepg "github.com/ion-core/backend/internal/enterprise/adapter/postgres"
+	enterprisetax "github.com/ion-core/backend/internal/enterprise/adapter/tax"
 	enterprisecron "github.com/ion-core/backend/internal/enterprise/cron"
 	auditpg "github.com/ion-core/backend/pkg/audit/postgres"
 	enterpriseusecase "github.com/ion-core/backend/internal/enterprise/usecase"
+	// Wave 93 — tax bounded context. Loose-coupled to enterprise.* (no
+	// cross-schema FKs); mounted here only because we already have the
+	// pool + auth verifier wired and a dedicated tax-svc binary would
+	// be over-engineering for a Phase 1 scaffold.
+	taxdjp "github.com/ion-core/backend/internal/tax/adapter/djp"
+	taxhttp "github.com/ion-core/backend/internal/tax/adapter/http"
+	taxpg "github.com/ion-core/backend/internal/tax/adapter/postgres"
+	taxusecase "github.com/ion-core/backend/internal/tax/usecase"
+	// Wave 107 — vendor metrics updater seam (cross-context). The
+	// postgres ProviderRepository implements VendorMetricsUpdater; we
+	// pass it via WithVendorMetrics so the IC-PO-accept hook can bump
+	// provider counters. Vendor schema may not be applied; the seam is
+	// nil-safe at the usecase layer.
+	vendormgmtpg "github.com/ion-core/backend/internal/vendormgmt/adapter/postgres"
 	"github.com/ion-core/backend/pkg/auth"
 	"github.com/ion-core/backend/pkg/config"
 	"github.com/ion-core/backend/pkg/database"
@@ -88,6 +103,20 @@ func main() {
 	// 0032 polish — notification prefs + EWO checklist templates.
 	notificationPrefRepo := enterprisepg.NewNotificationPrefRepository(pool)
 	ewoChecklistTemplateRepo := enterprisepg.NewEWOChecklistTemplateRepository(pool)
+	// Wave 95 — Customer PO + Intercompany PO + IC pair config.
+	customerPORepo := enterprisepg.NewCustomerPORepository(pool)
+	icPORepo := enterprisepg.NewIntercompanyPORepository(pool)
+	icPairRepo := enterprisepg.NewIntercompanyPairRepository(pool)
+	// Wave 106 — Pre-BOQ required-field config repo (TC-OP-009).
+	preBOQFieldRepo := enterprisepg.NewPreBOQRequiredFieldRepository(pool)
+	// Wave 96 — EWO reschedule audit trail (dual-EWO scheduling).
+	ewoScheduleHistoryRepo := enterprisepg.NewEWOScheduleHistoryRepository(pool)
+	// Wave 103 — Technician mobile API repos. EWOMobileRepository
+	// enforces side='y' + assigned_technician_user_id in SQL so no
+	// caller can accidentally widen the technician scope.
+	ewoMobileRepo := enterprisepg.NewEWOMobileRepository(pool)
+	ewoPushLogRepo := enterprisepg.NewEWOPushLogRepository(pool)
+	ewoChecklistProgressRepo := enterprisepg.NewEWOChecklistProgressRepository(pool)
 
 	verifier := auth.NewVerifier(cfg.JWTSecret, cfg.JWTIssuer)
 
@@ -106,7 +135,20 @@ func main() {
 		WithProjects(projectRepo, projectSiteRepo, enterpriseSvcRepo).
 		WithRFQs(rfqRepo).
 		WithNotificationPrefs(notificationPrefRepo).
-		WithEWOChecklistTemplates(ewoChecklistTemplateRepo)
+		WithEWOChecklistTemplates(ewoChecklistTemplateRepo).
+		WithCustomerPOs(customerPORepo).
+		WithIntercompanyPOs(icPORepo, icPairRepo).
+		WithEWOScheduling(ewoScheduleHistoryRepo).
+		// Wave 106 — Pre-BOQ structured validator config + approval
+		// advisory-lock pool.
+		WithPreBOQRequiredFields(preBOQFieldRepo).
+		WithLockPool(pool).
+		// Wave 107 — vendor metrics updater seam. The postgres provider
+		// repo's IncrementCompletedJob satisfies the VendorMetricsUpdater
+		// port; the IC-PO-accept hook uses it to bump per-provider
+		// counters. nil-safe — when the vendor schema isn't applied the
+		// hook silently no-ops.
+		WithVendorMetrics(vendormgmtpg.NewProviderRepository(pool))
 
 	// Phase 2 handler mounts /pricebooks, /opportunities, etc.
 	handler := enterprisehttp.NewHandler(svc, verifier)
@@ -127,8 +169,70 @@ func main() {
 	// Phase 2 gap closure — service catalog + project milestones + S-Curve.
 	phase2Handler := enterprisehttp.NewPhase2Handler(pool, verifier)
 
+	// Wave 92 — multi-company holding scaffolding (read-only for now).
+	// Mutating endpoints come once the FK rollout to existing enterprise
+	// tables is agreed; today these surface holding_companies +
+	// subsidiaries so the dashboard can pick a commercial owner without
+	// guessing UUIDs. The handler depends directly on the two repos
+	// rather than going through `port.UseCase` because Wave 92 carries
+	// no business rules yet — see holding_handler.go header comment.
+	holdingRepo := enterprisepg.NewHoldingCompanyRepository(pool)
+	subsidiaryRepo := enterprisepg.NewSubsidiaryRepository(pool)
+	holdingHandler := enterprisehttp.NewHoldingHandler(holdingRepo, subsidiaryRepo, verifier)
+
+	// Wave 93 — tax bounded context (PKP / Faktur Pajak scaffold).
+	// Wave 101 — DJP gateway is now the production-shaped HTTP client.
+	// When DJP_ENABLED is not "true" it short-circuits to the same 503
+	// djp.scaffold the Wave 93 stub returned, so deployments without
+	// real DJP credentials keep working unchanged. Logs at startup
+	// which mode is active.
+	taxProfileRepo := taxpg.NewCompanyTaxProfileRepository(pool)
+	taxFakturRepo := taxpg.NewFakturPajakRepository(pool)
+	djpClient := taxdjp.NewClient(taxdjp.ConfigFromEnv())
+	taxSvc := taxusecase.NewService(taxProfileRepo, taxFakturRepo, djpClient, log)
+	taxHandler := taxhttp.NewHandler(taxSvc, verifier)
+
+	// Wave 101 — bridge tax → enterprise so BOQ approval can stamp the
+	// active tax_profile + snapshot hash. This is the ONE approved
+	// cross-context reference: the resolver adapter wraps
+	// tax.usecase.Service.GetActiveProfile and maps to the enterprise
+	// port DTO.
+	svc = svc.WithTaxResolver(enterprisetax.NewResolver(taxSvc))
+
+	// Wave 95 — Customer PO + Intercompany PO HTTP surfaces.
+	customerPOHandler := enterprisehttp.NewCustomerPOHandler(svc, verifier)
+	icPOHandler := enterprisehttp.NewIntercompanyPOHandler(svc, verifier)
+	// Wave 96 — TL Scheduling routes (/ewos/{id}/schedule etc.).
+	tlSchedulingHandler := enterprisehttp.NewTLSchedulingHandler(svc, verifier)
+	// Wave 103 — Technician mobile service + handler. The service is
+	// constructed standalone (not via enterpriseusecase.Service builders)
+	// because the mobile surface is a future split candidate; keeping
+	// the deps narrow makes the move mechanical.
+	mobileSvc := enterpriseusecase.NewTechnicianMobileService(
+		ewoMobileRepo, ewoPushLogRepo, ewoChecklistProgressRepo, log,
+	).WithAudit(auditWriter)
+	mobileHandler := enterprisehttp.NewMobileEWOHandler(mobileSvc, verifier)
+
 	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
 	server.SetHealth("enterprise-svc", pool.Ping)
+
+	// Wave 97 — block suspended actors before any enterprise handler
+	// runs. The middleware is a no-op for unauthenticated routes
+	// (/healthz, etc.) because it short-circuits when no claims are
+	// attached, so it's safe to mount at the router level. We sit it
+	// BEFORE the handler mounts so all parallel route additions
+	// (Wave 95 customer_po + IC-PO, future waves) inherit the check
+	// automatically without per-handler wiring.
+	server.Router.Use(enterprisehttp.RequireActiveActor(verifier))
+
+	// Wave 105 — Prometheus instrumentation. Placed after the
+	// authz middleware so the in-flight gauge / latency histogram
+	// reflect actually-served requests (suspended actors short-
+	// circuit upstream and don't reach the handler). /metrics is
+	// mounted next to /healthz — scraped by ops Prometheus.
+	server.Router.Use(httpserver.PrometheusMiddleware("enterprise-svc"))
+	server.Router.Handle("/metrics", httpserver.MetricsHandler())
+
 	handler.Mount(server.Router)
 	boqHandler.Mount(server.Router)
 	quotationHandler.Mount(server.Router)
@@ -137,6 +241,12 @@ func main() {
 	notificationHandler.Mount(server.Router)
 	preLaunchHandler.Mount(server.Router)
 	phase2Handler.Mount(server.Router)
+	holdingHandler.Mount(server.Router)
+	taxHandler.Mount(server.Router)
+	customerPOHandler.Mount(server.Router)
+	icPOHandler.Mount(server.Router)
+	tlSchedulingHandler.Mount(server.Router)
+	mobileHandler.Mount(server.Router)
 
 	// Push-notification dispatcher. Stub provider until FCM credentials
 	// land (docs/backlog.md §FCM/APNS). The milestone-invoicer fans
@@ -152,6 +262,15 @@ func main() {
 	enterprisecron.New(pool, log).
 		WithTerminIssuer(svc).
 		WithNotifier(notifier).
+		WithAuditWriter(auditWriter).
+		WithTechnicianPushDispatcher(ewoMobileRepo, ewoPushLogRepo, notifier).
+		// Wave 106 — opportunity auto-Lost watcher + quotation expiry.
+		WithAutoLostSweeper(svc).
+		WithQuotationExpirer(svc).
+		// Wave 107 — invoice reminder dispatcher. Daily ticker; fires
+		// notifyx push for invoices coming due in <= 3 days and stamps
+		// reminder_sent_at so the dedupe sticks.
+		WithInvoiceReminderDispatcher(svc).
 		Start(ctx)
 
 	if err := server.Run(ctx); err != nil {

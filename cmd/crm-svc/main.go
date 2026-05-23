@@ -181,6 +181,9 @@ func main() {
 	}
 	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
 	server.SetHealth("crm-svc", pool.Ping)
+	// Wave 105 — Prometheus instrumentation + /metrics scrape endpoint.
+	server.Router.Use(httpserver.PrometheusMiddleware("crm-svc"))
+	server.Router.Handle("/metrics", httpserver.MetricsHandler())
 	handler.Mount(server.Router)
 
 	// Wave 83 (TC-RAD-013/014/015) — RADIUS profile-refresh hook for

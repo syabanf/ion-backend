@@ -18,6 +18,7 @@ import (
 	platformcrm "github.com/ion-core/backend/internal/platform/adapter/crm"
 	platformpg "github.com/ion-core/backend/internal/platform/adapter/postgres"
 	platformusecase "github.com/ion-core/backend/internal/platform/usecase"
+	audithttp "github.com/ion-core/backend/pkg/audit/http"
 	auditpg "github.com/ion-core/backend/pkg/audit/postgres"
 	"github.com/ion-core/backend/pkg/auth"
 	"github.com/ion-core/backend/pkg/config"
@@ -94,9 +95,20 @@ func main() {
 
 	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
 	server.SetHealth("identity-svc", pool.Ping)
+	// Wave 105 — Prometheus instrumentation + /metrics scrape endpoint.
+	server.Router.Use(httpserver.PrometheusMiddleware("identity-svc"))
+	server.Router.Handle("/metrics", httpserver.MetricsHandler())
 	handler.Mount(server.Router)
 	platformHandler.Mount(server.Router)
 	priorityHandler.Mount(server.Router)
+
+	// Wave 104 — audit query + chain-verify API. Mounts under /api/audit
+	// guarded by identity.audit.read. The reader shares the same pgx pool
+	// as the writer; identity-svc is the canonical home because the
+	// audit_logs table lives in the identity schema.
+	auditReader := auditpg.NewReader(pool)
+	auditQueryHandler := audithttp.NewHandler(auditReader, verifier)
+	auditQueryHandler.MountAuditRoutes(server.Router)
 
 	if err := server.Run(ctx); err != nil {
 		log.Error("http server stopped with error", "err", err)

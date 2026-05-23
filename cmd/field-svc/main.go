@@ -235,6 +235,9 @@ func main() {
 
 	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
 	server.SetHealth("field-svc", pool.Ping)
+	// Wave 105 — Prometheus instrumentation + /metrics scrape endpoint.
+	server.Router.Use(httpserver.PrometheusMiddleware("field-svc"))
+	server.Router.Handle("/metrics", httpserver.MetricsHandler())
 	handler.Mount(server.Router)
 	uploadHandler.Mount(server.Router)
 

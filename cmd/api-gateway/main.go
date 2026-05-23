@@ -42,6 +42,12 @@ func main() {
 	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
 	server.SetHealth("api-gateway", nil) // liveness only — no DB
 
+	// Wave 105 — Prometheus instrumentation + /metrics scrape endpoint.
+	// Gateway-side metrics tell us the user-perceived latency (including
+	// proxy hop) while the per-service /metrics give us the inside view.
+	server.Router.Use(httpserver.PrometheusMiddleware("api-gateway"))
+	server.Router.Handle("/metrics", httpserver.MetricsHandler())
+
 	// Route table: URL prefix → upstream service.
 	// Add more entries as bounded contexts come online.
 	upstreams := map[string]string{

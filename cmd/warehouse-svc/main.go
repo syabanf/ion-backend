@@ -91,6 +91,9 @@ func main() {
 	priorityHandler := warehousehttp.NewPriorityHandler(pool, verifier)
 	server := httpserver.New(httpserver.DefaultConfig(cfg.HTTPPort), log)
 	server.SetHealth("warehouse-svc", pool.Ping)
+	// Wave 105 — Prometheus instrumentation + /metrics scrape endpoint.
+	server.Router.Use(httpserver.PrometheusMiddleware("warehouse-svc"))
+	server.Router.Handle("/metrics", httpserver.MetricsHandler())
 	handler.Mount(server.Router)
 	priorityHandler.Mount(server.Router)
 
