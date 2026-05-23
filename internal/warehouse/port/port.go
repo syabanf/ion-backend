@@ -280,7 +280,13 @@ type UseCase interface {
 	GetPurchaseOrder(ctx context.Context, id uuid.UUID) (*PurchaseOrderDetail, error)
 	ListPurchaseOrders(ctx context.Context, f PurchaseOrderListFilter) ([]domain.PurchaseOrder, int, error)
 	SubmitPurchaseOrder(ctx context.Context, id, by uuid.UUID) (*PurchaseOrderDetail, error)
+	ApprovePurchaseOrder(ctx context.Context, id, by uuid.UUID) (*PurchaseOrderDetail, error)
 	CancelPurchaseOrder(ctx context.Context, id, by uuid.UUID, reason string) (*PurchaseOrderDetail, error)
+
+	// Goods receipts (Wave 86)
+	CreateGoodsReceipt(ctx context.Context, in CreateGoodsReceiptInput) (*GoodsReceiptDetail, error)
+	GetGoodsReceipt(ctx context.Context, id uuid.UUID) (*GoodsReceiptDetail, error)
+	ListGoodsReceiptsForPO(ctx context.Context, poID uuid.UUID) ([]GoodsReceiptDetail, error)
 }
 
 // CreatePurchaseOrderInput — usecase entry point. The PO number is
@@ -469,4 +475,97 @@ type PurchaseOrderRepository interface {
 	// new status + actor + timestamp and calls in; the repo only
 	// persists what it's told.
 	UpdateStatus(ctx context.Context, id uuid.UUID, po *domain.PurchaseOrder) error
+}
+
+// =====================================================================
+// Wave 86 (Tier 3) — Goods Receipts
+// =====================================================================
+
+// ReceiptLineInput is one row in the incoming POST body. For
+// serialized items, the caller passes one entry per serial (with the
+// serial number) and the repo creates one asset + one
+// goods_receipt_line per entry. For non-serialized items the caller
+// passes a single entry with no serial and a positive QuantityReceived.
+type ReceiptLineInput struct {
+	PurchaseOrderLineID uuid.UUID
+	QuantityReceived    float64
+	UnitCost            float64 // 0 → fall back to the PO line's unit_cost
+	// Serialized items only — one serial per physical unit. Length
+	// must equal QuantityReceived (the usecase enforces this).
+	Serials []ReceiptSerialEntry
+	Notes string
+}
+
+// ReceiptSerialEntry holds per-serial fields that materialize on
+// new warehouse.assets rows.
+type ReceiptSerialEntry struct {
+	SerialNumber string
+	QRCode       string
+	MACAddress   string
+	// Condition + Ownership default to 'new' / 'ion_owned' per the
+	// asset domain. Callers can override on a per-serial basis.
+	Condition string
+	Ownership string
+}
+
+// CreateGoodsReceiptInput is the usecase entry point. The receipt
+// number is generated server-side; callers don't pass it in.
+type CreateGoodsReceiptInput struct {
+	PurchaseOrderID uuid.UUID
+	WarehouseID     uuid.UUID
+	ReceivedBy      *uuid.UUID
+	CarrierRef      string
+	Notes           string
+	Lines           []ReceiptLineInput
+}
+
+// GoodsReceiptDetail bundles header + lines.
+type GoodsReceiptDetail struct {
+	Receipt domain.GoodsReceipt
+	Lines   []domain.GoodsReceiptLine
+}
+
+type GoodsReceiptRepository interface {
+	// Create persists the receipt + lines, bumps each parent PO
+	// line's quantity_received, optionally creates asset rows for
+	// serialized items, and records stock_movements (intake) — all
+	// in one tx. The usecase composes the payload; this method is
+	// the atomic writer.
+	Create(ctx context.Context, in CreateGoodsReceiptPersist) (*GoodsReceiptDetail, error)
+	FindByID(ctx context.Context, id uuid.UUID) (*GoodsReceiptDetail, error)
+	ListForPO(ctx context.Context, poID uuid.UUID) ([]GoodsReceiptDetail, error)
+}
+
+// CreateGoodsReceiptPersist is the payload the postgres adapter
+// consumes. The usecase has already:
+//   - validated the PO state + line balances
+//   - allocated asset IDs for serialized items
+//   - computed the new po_line.quantity_received values
+//   - decided whether the PO should flip to receiving (and to closed
+//     if all lines are now fully received)
+type CreateGoodsReceiptPersist struct {
+	Receipt          domain.GoodsReceipt
+	Lines            []domain.GoodsReceiptLine
+	// AssetsToCreate carries fully-built domain.Asset rows for
+	// serialized items in this receipt; each one corresponds to a
+	// line in Lines by AssetID.
+	AssetsToCreate []domain.Asset
+	// POLineQtyUpdates maps purchase_order_line_id → new quantity_received.
+	POLineQtyUpdates map[uuid.UUID]float64
+	// Optional PO status flip applied in the same tx (receiving / closed).
+	POStatusFlip *domain.PurchaseOrder
+	// Stock movement audit rows (one per asset or one per non-serialized line).
+	Movements []domain.StockMovement
+	// Non-serialized stock_level deltas keyed by (warehouse_id, stock_item_id).
+	StockLevelDeltas []StockLevelDelta
+}
+
+// StockLevelDelta — pair the GR uses to bump warehouse.stock_levels
+// for non-serialized items. Cable + consumable receipts produce one
+// entry per line; serialized items don't touch stock_levels (asset
+// rows are the authoritative inventory).
+type StockLevelDelta struct {
+	WarehouseID uuid.UUID
+	StockItemID uuid.UUID
+	Delta       float64
 }

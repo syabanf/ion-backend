@@ -44,7 +44,10 @@ type Service struct {
 	// Wave 85 (Tier 3 starter) — purchase orders. Optional; the create
 	// + list + detail surface 503s cleanly when this isn't wired.
 	purchaseOrders port.PurchaseOrderRepository
-	log            *slog.Logger
+	// Wave 86 — goods receipts. Depends on purchaseOrders being wired
+	// since CreateGoodsReceipt mutates parent PO line state.
+	goodsReceipts port.GoodsReceiptRepository
+	log           *slog.Logger
 }
 
 // WithValuation attaches the platform_config reader so ListAssets +

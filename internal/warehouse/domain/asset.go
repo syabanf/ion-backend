@@ -94,6 +94,11 @@ type Asset struct {
 	Notes                string
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+
+	// Wave 86 — first-class link to the PO that received this asset.
+	// Supersedes the free-form PurchaseOrderRef TEXT column for new
+	// rows; legacy rows keep the TEXT ref for back-compat.
+	PurchaseOrderID *uuid.UUID
 }
 
 // NewAsset constructs an asset record. Used at intake.

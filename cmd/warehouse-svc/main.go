@@ -60,6 +60,8 @@ func main() {
 	woDispatchRepo := warehousepg.NewWODispatchRepository(pool)
 	// Wave 85 (Tier 3 starter) — purchase orders.
 	poRepo := warehousepg.NewPurchaseOrderRepository(pool)
+	// Wave 86 — goods receipts (one-shot atomic tx; depends on poRepo).
+	grRepo := warehousepg.NewGoodsReceiptRepository(pool)
 
 	verifier := auth.NewVerifier(cfg.JWTSecret, cfg.JWTIssuer)
 
@@ -75,7 +77,8 @@ func main() {
 		WithSuppliers(supplierRepo).
 		WithValuation(valuation).
 		WithWODispatch(woDispatchRepo).
-		WithPurchaseOrders(poRepo)
+		WithPurchaseOrders(poRepo).
+		WithGoodsReceipts(grRepo)
 
 	handler := warehousehttp.NewHandler(svc, verifier).WithWODispatch(svc)
 	priorityHandler := warehousehttp.NewPriorityHandler(pool, verifier)

@@ -153,7 +153,20 @@ func (h *Handler) Mount(r chi.Router) {
 		r.With(httpserver.RequirePermission("warehouse.po.manage")).
 			Post("/purchase-orders/{id}/submit", h.submitPurchaseOrder)
 		r.With(httpserver.RequirePermission("warehouse.po.manage")).
+			Post("/purchase-orders/{id}/approve", h.approvePurchaseOrder)
+		r.With(httpserver.RequirePermission("warehouse.po.manage")).
 			Post("/purchase-orders/{id}/cancel", h.cancelPurchaseOrder)
+
+		// --- Wave 86 — Goods receipts
+		// Receive (manage) requires the same permission as PO manage
+		// because it physically moves inventory; reads piggy-back on
+		// warehouse.po.read.
+		r.With(httpserver.RequirePermission("warehouse.po.read")).
+			Get("/purchase-orders/{id}/receipts", h.listReceiptsForPO)
+		r.With(httpserver.RequirePermission("warehouse.po.manage")).
+			Post("/purchase-orders/{id}/receipts", h.createGoodsReceipt)
+		r.With(httpserver.RequirePermission("warehouse.po.read")).
+			Get("/goods-receipts/{id}", h.getGoodsReceipt)
 	})
 
 	// WO dispatch — opt-in surface. Self-skips when WithWODispatch

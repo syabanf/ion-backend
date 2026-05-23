@@ -207,6 +207,61 @@ func (p *PurchaseOrder) Submit(by uuid.UUID, now time.Time) error {
 	return nil
 }
 
+// Approve advances submitted → approved. Procurement decision. The
+// usecase carries the actor for the audit trail. Wave 86 adds this so
+// the goods-receipt workflow has a valid precondition state.
+func (p *PurchaseOrder) Approve(by uuid.UUID, now time.Time) error {
+	if p.Status == POStatusApproved {
+		return nil
+	}
+	if p.Status != POStatusSubmitted {
+		return errors.Conflict("po.not_approvable",
+			"only submitted POs can be approved; current status: "+string(p.Status))
+	}
+	p.Status = POStatusApproved
+	p.ApprovedBy = &by
+	t := now.UTC()
+	p.ApprovedAt = &t
+	p.UpdatedAt = t
+	return nil
+}
+
+// MarkReceiving flips approved → receiving on the first goods-receipt
+// event. Idempotent on already-receiving so a multi-batch shipment
+// doesn't error on the second receipt. The usecase calls this from
+// inside the GR creation tx.
+func (p *PurchaseOrder) MarkReceiving(now time.Time) error {
+	if p.Status == POStatusReceiving {
+		return nil
+	}
+	if p.Status != POStatusApproved {
+		return errors.Conflict("po.not_receiving_eligible",
+			"only approved POs can begin receiving; current status: "+string(p.Status))
+	}
+	p.Status = POStatusReceiving
+	p.UpdatedAt = now.UTC()
+	return nil
+}
+
+// Close advances receiving → closed when all lines are fully received.
+// The usecase decides "all received" by summing quantity_received
+// against quantity_ordered; this method only enforces the state
+// transition.
+func (p *PurchaseOrder) Close(now time.Time) error {
+	if p.Status == POStatusClosed {
+		return nil
+	}
+	if p.Status != POStatusReceiving {
+		return errors.Conflict("po.not_closeable",
+			"only receiving POs can be closed; current status: "+string(p.Status))
+	}
+	p.Status = POStatusClosed
+	t := now.UTC()
+	p.ClosedAt = &t
+	p.UpdatedAt = t
+	return nil
+}
+
 // Cancel ends the PO without receiving. Allowed from any non-terminal
 // state; closing and re-opening isn't supported (callers create a new
 // PO instead). Reason is required for the audit trail.

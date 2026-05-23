@@ -91,6 +91,72 @@ func TestSubmit_OnlyFromDraft(t *testing.T) {
 	}
 }
 
+func TestApprove_OnlyFromSubmitted(t *testing.T) {
+	po, _, _ := NewPurchaseOrder(
+		uuid.New(), uuid.New(), uuid.New(),
+		[]PurchaseOrderLineInput{
+			{StockItemID: uuid.New(), QuantityOrdered: 1, UnitCost: 1},
+		},
+		11, "", nil, time.Now(),
+	)
+	// Draft → approve should fail.
+	if err := po.Approve(uuid.New(), time.Now()); err == nil {
+		t.Fatalf("Approve from draft should error")
+	}
+	po.Status = POStatusSubmitted
+	if err := po.Approve(uuid.New(), time.Now()); err != nil {
+		t.Fatalf("Approve from submitted should succeed: %v", err)
+	}
+	if po.Status != POStatusApproved {
+		t.Fatalf("expected approved, got %s", po.Status)
+	}
+	// Idempotent on already-approved.
+	if err := po.Approve(uuid.New(), time.Now()); err != nil {
+		t.Fatalf("already-approved Approve should be a no-op: %v", err)
+	}
+}
+
+func TestReceivingThenClose(t *testing.T) {
+	po, _, _ := NewPurchaseOrder(
+		uuid.New(), uuid.New(), uuid.New(),
+		[]PurchaseOrderLineInput{
+			{StockItemID: uuid.New(), QuantityOrdered: 1, UnitCost: 1},
+		},
+		11, "", nil, time.Now(),
+	)
+	po.Status = POStatusApproved
+	if err := po.MarkReceiving(time.Now()); err != nil {
+		t.Fatalf("approved → receiving should succeed: %v", err)
+	}
+	if po.Status != POStatusReceiving {
+		t.Fatalf("expected receiving, got %s", po.Status)
+	}
+	// Idempotent.
+	if err := po.MarkReceiving(time.Now()); err != nil {
+		t.Fatalf("already-receiving MarkReceiving should be a no-op: %v", err)
+	}
+	if err := po.Close(time.Now()); err != nil {
+		t.Fatalf("receiving → closed should succeed: %v", err)
+	}
+	if po.Status != POStatusClosed {
+		t.Fatalf("expected closed, got %s", po.Status)
+	}
+	if po.ClosedAt == nil {
+		t.Fatalf("ClosedAt should be set")
+	}
+	// Close from draft is invalid.
+	po2, _, _ := NewPurchaseOrder(
+		uuid.New(), uuid.New(), uuid.New(),
+		[]PurchaseOrderLineInput{
+			{StockItemID: uuid.New(), QuantityOrdered: 1, UnitCost: 1},
+		},
+		11, "", nil, time.Now(),
+	)
+	if err := po2.Close(time.Now()); err == nil {
+		t.Fatalf("Close from draft should error")
+	}
+}
+
 func TestCancel_RequiresReason(t *testing.T) {
 	po, _, _ := NewPurchaseOrder(
 		uuid.New(), uuid.New(), uuid.New(),
