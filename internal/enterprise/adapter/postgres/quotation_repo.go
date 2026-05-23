@@ -37,7 +37,8 @@ const quotationListCols = `
 	pdf_hash, pdf_bytes_size,
 	valid_from, valid_until, issued_at,
 	accepted_at, rejected_at, cancelled_at, superseded_at,
-	COALESCE(notes,''), revision, issued_by, created_at, updated_at
+	COALESCE(notes,''), revision, issued_by, created_at, updated_at,
+	tax_snapshot_hash
 `
 
 const quotationFullCols = `
@@ -46,7 +47,8 @@ const quotationFullCols = `
 	pdf_bytes, pdf_hash, pdf_bytes_size,
 	valid_from, valid_until, issued_at,
 	accepted_at, rejected_at, cancelled_at, superseded_at,
-	COALESCE(notes,''), revision, issued_by, created_at, updated_at
+	COALESCE(notes,''), revision, issued_by, created_at, updated_at,
+	tax_snapshot_hash
 `
 
 func (r *QuotationRepository) List(ctx context.Context, f port.QuotationListFilter) ([]domain.Quotation, int, error) {
@@ -167,9 +169,11 @@ func (r *QuotationRepository) Create(ctx context.Context, q *domain.Quotation) e
 			 pdf_bytes, pdf_hash, pdf_bytes_size,
 			 valid_from, valid_until, issued_at,
 			 accepted_at, rejected_at, cancelled_at, superseded_at,
-			 notes, revision, issued_by, created_at, updated_at)
+			 notes, revision, issued_by, created_at, updated_at,
+			 tax_snapshot_hash)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-		        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+		        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
+		        $26)
 	`,
 		q.ID, q.QuotationNumber, q.VersionNo, q.BOQVersionID, q.OpportunityID, string(q.Status),
 		q.SellTotal, q.CostTotal, q.MarginPct, q.Currency,
@@ -177,6 +181,7 @@ func (r *QuotationRepository) Create(ctx context.Context, q *domain.Quotation) e
 		q.ValidFrom, q.ValidUntil, q.IssuedAt,
 		q.AcceptedAt, q.RejectedAt, q.CancelledAt, q.SupersededAt,
 		q.Notes, q.Revision, q.IssuedBy, q.CreatedAt, q.UpdatedAt,
+		q.TaxSnapshotHash,
 	)
 	if err != nil {
 		return mapDBError(err, "quotation", "insert quotation")
@@ -245,6 +250,7 @@ func scanQuotation(row pgx.Row) (domain.Quotation, error) {
 		&q.ValidFrom, &q.ValidUntil, &q.IssuedAt,
 		&q.AcceptedAt, &q.RejectedAt, &q.CancelledAt, &q.SupersededAt,
 		&q.Notes, &q.Revision, &q.IssuedBy, &q.CreatedAt, &q.UpdatedAt,
+		&q.TaxSnapshotHash,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Quotation{}, derrors.NotFound("quotation.not_found", "quotation not found")
@@ -273,6 +279,7 @@ func scanQuotationListRow(row pgx.Row) (domain.Quotation, error) {
 		&q.ValidFrom, &q.ValidUntil, &q.IssuedAt,
 		&q.AcceptedAt, &q.RejectedAt, &q.CancelledAt, &q.SupersededAt,
 		&q.Notes, &q.Revision, &q.IssuedBy, &q.CreatedAt, &q.UpdatedAt,
+		&q.TaxSnapshotHash,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Quotation{}, derrors.NotFound("quotation.not_found", "quotation not found")

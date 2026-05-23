@@ -125,6 +125,12 @@ func (s *Service) IssueInvoice(ctx context.Context, in port.IssueInvoiceInput) (
 	}
 	inv.IssuedBy = in.IssuedBy
 	inv.Notes = strings.TrimSpace(in.Notes)
+	// Wave 101 — chain the tax_snapshot_hash from quotation to invoice.
+	// Mismatches (different hashes already set on the invoice) surface
+	// as tax_snapshot.mismatch. No-op when the chain isn't wired.
+	if err := s.inheritTaxSnapshotForInvoice(q, inv); err != nil {
+		return nil, err
+	}
 	if err := s.invoices.Create(ctx, inv); err != nil {
 		return nil, err
 	}

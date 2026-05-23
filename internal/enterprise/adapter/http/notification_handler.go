@@ -38,12 +38,23 @@ func (h *NotificationHandler) Mount(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(httpserver.RequireAuth(h.verifier))
 
+		// Legacy paths — kept for back-compat with Wave 30 clients.
 		r.With(httpserver.RequirePermission("enterprise.notification.read")).
 			Get("/notifications", h.list)
 		r.With(httpserver.RequirePermission("enterprise.notification.read")).
 			Post("/notifications/{id}/read", h.markRead)
 		r.With(httpserver.RequirePermission("enterprise.notification.read")).
 			Post("/notifications/read-all", h.markAllRead)
+
+		// Wave 107 — canonical paths from the audit spec.
+		//   GET    /notifications/inbox          ?read=true|false&page=&page_size=
+		//   POST   /notifications/mark-all-read  alias of /notifications/read-all
+		//
+		// `/notifications/{id}/read` already matches the spec.
+		r.With(httpserver.RequirePermission("enterprise.notification.read")).
+			Get("/notifications/inbox", h.list)
+		r.With(httpserver.RequirePermission("enterprise.notification.read")).
+			Post("/notifications/mark-all-read", h.markAllRead)
 
 		// Preferences (per-user mute toggles).
 		r.With(httpserver.RequirePermission("enterprise.notification_pref.manage")).
@@ -157,9 +168,15 @@ func (h *NotificationHandler) list(w http.ResponseWriter, r *http.Request) {
 		page = 1
 	}
 	pageSize := parseIntDefaultLocal(q.Get("page_size"), 50)
+	// Wave 107 — accept both `unread_only=true` (legacy) and
+	// `read=false` (spec). `read=true` is the inverse — return ONLY
+	// read items — which the usecase doesn't model directly; for that
+	// path we just call the unfiltered list and filter in the DTO loop.
+	unreadOnly := q.Get("unread_only") == "true" || q.Get("read") == "false"
+	readOnly := q.Get("read") == "true"
 	items, total, unread, err := h.uc.ListMyNotifications(r.Context(), port.ListNotificationsInput{
 		RecipientUserID: *actor,
-		UnreadOnly:      q.Get("unread_only") == "true",
+		UnreadOnly:      unreadOnly,
 		Limit:           pageSize,
 		Offset:          (page - 1) * pageSize,
 	})
@@ -169,6 +186,11 @@ func (h *NotificationHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]notificationDTO, 0, len(items))
 	for _, n := range items {
+		// Wave 107 — when `read=true` was requested, skip unread rows
+		// here (the usecase doesn't model "read only" natively).
+		if readOnly && n.ReadAt == nil {
+			continue
+		}
 		out = append(out, toNotificationDTO(n))
 	}
 	httpserver.WriteJSON(w, http.StatusOK, map[string]any{

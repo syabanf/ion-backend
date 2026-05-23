@@ -25,7 +25,8 @@ func NewInternalTransactionRepository(pool *pgxpool.Pool) *InternalTransactionRe
 const internalTxCols = `
 	id, boq_version_id, boq_line_id, quotation_id, vendor_company_id,
 	sell_amount, cost_amount, margin_amount, currency,
-	recognized_at, COALESCE(notes, ''), created_at
+	recognized_at, COALESCE(notes, ''), created_at,
+	COALESCE(source_event, ''), superseded_at
 `
 
 // CreateBatch inserts all rows in one tx with ON CONFLICT DO NOTHING so
@@ -41,15 +42,24 @@ func (r *InternalTransactionRepository) CreateBatch(ctx context.Context, txs []d
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	for _, t := range txs {
+		// Default source_event when caller didn't set one — keeps
+		// pre-Wave-101 call sites compatible without forcing every
+		// place to thread the constant through.
+		source := t.SourceEvent
+		if source == "" {
+			source = domain.InternalTransactionSourceBOQApproval
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO enterprise.internal_transactions
 				(id, boq_version_id, boq_line_id, quotation_id, vendor_company_id,
-				 sell_amount, cost_amount, currency, recognized_at, notes, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+				 sell_amount, cost_amount, currency, recognized_at, notes, created_at,
+				 source_event)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			ON CONFLICT (boq_line_id) DO NOTHING
 		`,
 			t.ID, t.BOQVersionID, t.BOQLineID, t.QuotationID, t.VendorCompanyID,
 			t.SellAmount, t.CostAmount, t.Currency, t.RecognizedAt, t.Notes, t.CreatedAt,
+			source,
 		); err != nil {
 			return mapDBError(err, "internal_transaction", "insert")
 		}
@@ -140,6 +150,7 @@ func scanInternalTx(row pgx.Row) (domain.InternalTransaction, error) {
 		&t.ID, &t.BOQVersionID, &t.BOQLineID, &t.QuotationID, &t.VendorCompanyID,
 		&t.SellAmount, &t.CostAmount, &t.MarginAmount, &t.Currency,
 		&t.RecognizedAt, &t.Notes, &t.CreatedAt,
+		&t.SourceEvent, &t.SupersededAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.InternalTransaction{}, derrors.NotFound("internal_transaction.not_found", "not found")

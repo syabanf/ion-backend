@@ -18,6 +18,14 @@ import (
 //
 // Best-effort: caller logs but does NOT roll back the approval if this
 // fails. The ledger can be backfilled later from the BOQ snapshot.
+//
+// DEPRECATED (Wave 95): per the Wave 91 audit + Wave 94 acceptance
+// criteria, the canonical recognition trigger is IC-PO accept, not BOQ
+// approval. The new path is `recordInternalTransactionsOnICPOAccept`,
+// invoked from `AcceptIntercompanyPO`. We keep this call site LIVE
+// during Wave 95 to avoid breaking existing reports — a Wave 95b
+// reconciliation cron will surface double-counting; once that's stable
+// the BOQ-approval trigger gets removed in a dedicated wave.
 func (s *Service) recordInternalTransactionsOnApproval(ctx context.Context, b *domain.BOQ) error {
 	if s.internalTxs == nil || s.boqLines == nil {
 		return nil
@@ -58,6 +66,10 @@ func (s *Service) recordInternalTransactionsOnApproval(ctx context.Context, b *d
 			RecognizedAt: now,
 			Notes:        "BOQ approval auto-recognition",
 			CreatedAt:    now,
+			// Wave 95b — tag the source path so the reconciliation cron
+			// can later pick the IC-PO-accept row as canonical and mark
+			// this BOQ-approval row superseded.
+			SourceEvent: domain.InternalTransactionSourceBOQApproval,
 		})
 	}
 	return s.internalTxs.CreateBatch(ctx, out)

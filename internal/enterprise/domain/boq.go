@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -101,11 +102,110 @@ type BOQ struct {
 	CreatedBy             *uuid.UUID
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
+
+	// Wave 101 — tax snapshot chain.
+	//
+	// TaxProfileID is the tax.company_tax_profiles row that was active at
+	// the moment of approval; nil while the BOQ is in draft/in_approval.
+	// TaxSnapshotHash is a SHA-256 hex over the resolved profile's
+	// stance (is_pkp|ppn_rate|pph23_rate|effective_from|profile_id).
+	// Once stamped on MarkApproved they're immutable; the same hash
+	// carries forward to Quotation, Invoice, and Faktur Pajak so the
+	// audit trail can later prove "this exact tax stance produced this
+	// exact invoice" without re-reading the profile table.
+	TaxProfileID    *uuid.UUID
+	TaxSnapshotHash *string
+
+	// Wave 106 — commercial owner subsidiary FK (TC-BQ-013).
+	// Nullable for backward compat with rows created before Wave 106.
+	// When set, the line-level ic_po_required flag is derived as
+	// `assigned_provider_company_id != commercial_owner_subsidiary_id`
+	// in the DTO mapper. Persisted to boq_versions.commercial_owner_subsidiary_id
+	// via migration 0071.
+	CommercialOwnerSubsidiaryID *uuid.UUID
+}
+
+// LineICPORequired reports whether a BOQ line needs an IC-PO. Returns
+// true when:
+//   - the BOQ has a commercial_owner_subsidiary_id set, AND
+//   - the line has an assigned_provider_company_id set, AND
+//   - those two differ (the line will be executed by a sister
+//     subsidiary, not the commercial owner).
+//
+// Returns false when any prerequisite is missing — pre-Wave-106 BOQs
+// without the commercial-owner column treat the flag as "unknown,
+// default false" which keeps the read path stable.
+//
+// Used by the BOQ-line DTO mapper to surface the ic_po_required badge
+// (TC-BQ-013).
+func (b *BOQ) LineICPORequired(line *BOQLine) bool {
+	if b == nil || line == nil {
+		return false
+	}
+	if b.CommercialOwnerSubsidiaryID == nil {
+		return false
+	}
+	if line.AssignedProviderCompanyID == nil {
+		return false
+	}
+	return *b.CommercialOwnerSubsidiaryID != *line.AssignedProviderCompanyID
 }
 
 // DefaultTaxPct is the Indonesia PPN default (11%). Per-deal overrides
 // land on boq_versions.tax_pct; this constant is the seed.
+//
+// DEPRECATED (Wave 101): RecomputeHeaderTotals now prefers the resolved
+// tax_profile's effective rate when available. This constant remains
+// as a defensive fallback for paths that haven't yet been threaded
+// through the tax resolver (older code in invoice_plan.go + finance.go,
+// pre-existing tests). A follow-up wave will remove the fallback once
+// all call sites pass a profile-derived rate.
 const DefaultTaxPct = 11.0
+
+// TaxSnapshot is the small, immutable record of the tax stance a BOQ
+// was approved under. The hash returned by ComputeTaxSnapshot covers
+// every field below — changing any of them produces a different hash,
+// which is exactly what tax_snapshot.mismatch reconciliation depends
+// on.
+//
+// The struct mirrors the relevant subset of tax.CompanyTaxProfile but
+// is duplicated here so the enterprise domain layer does NOT
+// cross-import tax.* (per bounded-context discipline). The resolver
+// adapter at internal/enterprise/adapter/tax/ is the only seam where
+// the two contexts touch.
+type TaxSnapshot struct {
+	ProfileID     uuid.UUID
+	IsPKP         bool
+	PPNRate       float64 // 0.00–0.30, fractional (NOT percentage)
+	PPh23Rate     float64
+	EffectiveFrom time.Time
+}
+
+// ComputeTaxSnapshot produces the canonical SHA-256 hex of a
+// TaxSnapshot. Determinism rules:
+//   - Floats are formatted with 6 decimal places (NUMERIC(5,4) at the
+//     DB layer round-trips safely at this precision)
+//   - Times use UTC + RFC3339; the EffectiveFrom is a DATE so the
+//     time portion is always 00:00:00Z
+//   - All fields are pipe-separated to keep collisions accidental
+//     rather than structural
+//
+// Per CPQ TC-TAX-008/009/010: hashing the same snapshot 100× yields
+// identical hex; flipping is_pkp without bumping profile_id produces a
+// different hash (which is the snapshot-mismatch signal the
+// reconciliation cron flags).
+func ComputeTaxSnapshot(snap TaxSnapshot) string {
+	canonical := fmt.Sprintf(
+		"%t|%.6f|%.6f|%s|%s",
+		snap.IsPKP,
+		snap.PPNRate,
+		snap.PPh23Rate,
+		snap.EffectiveFrom.UTC().Format(time.RFC3339),
+		snap.ProfileID.String(),
+	)
+	sum := sha256.Sum256([]byte(canonical))
+	return hex.EncodeToString(sum[:])
+}
 
 // NewBOQ constructs a draft v1 BOQ attached to an opportunity +
 // pricebook version. The number is generated separately (so the
@@ -357,6 +457,13 @@ func (b *BOQ) RecomputeHeaderTotals(lines []BOQLine) {
 	// (pre-tax); the grand total layered on top is what the customer
 	// pays. Margin is computed on the subtotal — tax is a pass-through
 	// to the government, not part of our gross profit.
+	//
+	// Wave 101: prefer the BOQ's already-set tax_pct (resolved from the
+	// active tax_profile by the usecase) over the deprecated
+	// DefaultTaxPct. When neither has been set we still fall back to
+	// the 11% default so legacy call sites (invoice_plan.go,
+	// finance.go, and any draft BOQ that hasn't been through the
+	// resolver) keep producing sensible totals.
 	if b.TaxPct == 0 {
 		b.TaxPct = DefaultTaxPct
 	}
@@ -369,6 +476,46 @@ func (b *BOQ) RecomputeHeaderTotals(lines []BOQLine) {
 	} else {
 		b.MarginPct = (sumSell - sumCost) / sumSell * 100.0
 	}
+}
+
+// ApplyTaxProfile freezes the resolved tax_profile + computed snapshot
+// hash onto the BOQ. Called immediately before MarkApproved; the
+// usecase resolves the profile via the tax bounded context and feeds
+// the canonical TaxSnapshot into ComputeTaxSnapshot.
+//
+// Idempotent — calling with the same profile produces the same hash.
+// Calling with a DIFFERENT profile while the BOQ is already approved
+// returns a Conflict so we can't silently rewrite history; the only
+// way to swap profiles is to spawn a revision.
+func (b *BOQ) ApplyTaxProfile(snap TaxSnapshot) error {
+	if snap.ProfileID == uuid.Nil {
+		return errors.Validation(
+			"boq.tax_profile_required",
+			"tax_profile_id is required to stamp a tax snapshot",
+		)
+	}
+	hash := ComputeTaxSnapshot(snap)
+	if b.TaxSnapshotHash != nil && *b.TaxSnapshotHash != "" && *b.TaxSnapshotHash != hash {
+		// Already-approved BOQ with a different snapshot — refuse.
+		// Pre-approval (TaxSnapshotHash nil/empty) is the only legal
+		// path to (re)stamp.
+		if b.Status == BOQStatusApproved || b.Status == BOQStatusSuperseded {
+			return errors.Conflict(
+				"tax_snapshot.frozen",
+				"tax snapshot already stamped on an approved BOQ — spawn a revision to change the profile",
+			)
+		}
+	}
+	pid := snap.ProfileID
+	b.TaxProfileID = &pid
+	b.TaxSnapshotHash = &hash
+	// Sync header TaxPct from the resolved profile so RecomputeHeaderTotals
+	// uses the right rate. Stored as PERCENT (11.0) to match the
+	// existing column convention; the snapshot itself uses fractional
+	// (0.11) per tax.CompanyTaxProfile.
+	b.TaxPct = snap.PPNRate * 100.0
+	b.UpdatedAt = time.Now().UTC()
+	return nil
 }
 
 // =====================================================================
@@ -437,6 +584,15 @@ func (b *BOQ) Submit(lines []BOQLine, templateID uuid.UUID, snapshotHash string)
 
 // MarkApproved transitions in_approval → boq_approved. Called by the
 // usecase after the last approval step completes successfully.
+//
+// Wave 101: the tax_snapshot (TaxProfileID + TaxSnapshotHash) is
+// EXPECTED to have been stamped via ApplyTaxProfile immediately before
+// this call. We do NOT hard-require it at the domain layer because
+// existing deployments without the tax resolver wired need to keep
+// approving BOQs (the resolver is a Wave-101 introduction and is
+// nil-safe at the usecase layer). When the snapshot is missing we
+// leave the columns nullable; the reconciliation cron + invoice-time
+// validation will flag the gap.
 func (b *BOQ) MarkApproved() error {
 	if b.Status != BOQStatusInApproval {
 		return errors.Conflict(

@@ -270,6 +270,39 @@ func (o *Opportunity) CompletePreBOQ(snapshot []byte) error {
 	return nil
 }
 
+// Reassign hands an opportunity from one owner to another (TC-OP-011).
+// `prevOwner` captures the previous owner_user_id (nil-safe if the
+// opportunity was unowned) so the audit row can record the rotation.
+// Terminal stages reject reassignment — once Won/Lost the owner is
+// historically frozen.
+//
+// Returns the previous owner so the usecase can log it without making
+// a separate pre-read.
+func (o *Opportunity) Reassign(newOwnerID uuid.UUID) (prevOwner *uuid.UUID, err error) {
+	if newOwnerID == uuid.Nil {
+		return nil, errors.Validation(
+			"opportunity.reassign_new_owner_required",
+			"new owner_user_id is required",
+		)
+	}
+	if o.Stage == OpportunityStageWon || o.Stage == OpportunityStageLost {
+		return nil, errors.Conflict(
+			"opportunity.terminal",
+			"cannot reassign a terminal opportunity",
+		)
+	}
+	if o.OwnerUserID != nil && *o.OwnerUserID == newOwnerID {
+		return o.OwnerUserID, errors.Validation(
+			"opportunity.reassign_same_owner",
+			"new owner is the same as the current owner",
+		)
+	}
+	prev := o.OwnerUserID
+	o.OwnerUserID = &newOwnerID
+	o.touchActivity()
+	return prev, nil
+}
+
 // PinPricebook locks a pricebook version onto the opportunity. The
 // downstream BOQ (Phase 3) inherits this pin so Admin publishing a
 // newer pricebook doesn't change the quoted prices. Once set,

@@ -31,7 +31,9 @@ const pricebookLineCols = `
 	base_price, default_margin_pct, min_margin_pct, max_discount_pct,
 	COALESCE(allowed_provider_company_ids, '{}'::uuid[]),
 	COALESCE(owner_role,''),
-	sort_order, active, created_at, updated_at
+	sort_order, active,
+	COALESCE(priority_score, 0),
+	created_at, updated_at
 `
 
 func (r *PricebookLineRepository) ListByPricebook(ctx context.Context, pricebookID uuid.UUID) ([]domain.PricebookLine, error) {
@@ -44,6 +46,38 @@ func (r *PricebookLineRepository) ListByPricebook(ctx context.Context, pricebook
 	)
 	if err != nil {
 		return nil, derrors.Wrap(derrors.KindInternal, "db.pricebook_line_list", "list pricebook lines", err)
+	}
+	defer rows.Close()
+	out := []domain.PricebookLine{}
+	for rows.Next() {
+		l, err := scanPricebookLine(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, nil
+}
+
+// ListByPricebookSorted is the Wave 106 ordering variant — when `sort`
+// is "priority" the rows come back ordered by (priority_score DESC,
+// sku ASC) so the FE can render the recommended-vendor badge first.
+// Any other value falls back to the default (sort_order, name) so
+// existing callers stay unaffected.
+func (r *PricebookLineRepository) ListByPricebookSorted(ctx context.Context, pricebookID uuid.UUID, sort string) ([]domain.PricebookLine, error) {
+	orderBy := "sort_order, name"
+	if sort == "priority" {
+		orderBy = "priority_score DESC, sku ASC"
+	}
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+pricebookLineCols+`
+		 FROM enterprise.pricebook_lines
+		 WHERE pricebook_id = $1
+		 ORDER BY `+orderBy,
+		pricebookID,
+	)
+	if err != nil {
+		return nil, derrors.Wrap(derrors.KindInternal, "db.pricebook_line_list_sorted", "list pricebook lines sorted", err)
 	}
 	defer rows.Close()
 	out := []domain.PricebookLine{}
@@ -73,13 +107,13 @@ func (r *PricebookLineRepository) Create(ctx context.Context, l *domain.Priceboo
 			(id, pricebook_id, sku, name, category, description, unit,
 			 base_price, default_margin_pct, min_margin_pct, max_discount_pct,
 			 allowed_provider_company_ids, owner_role,
-			 sort_order, active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			 sort_order, active, priority_score, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`,
 		l.ID, l.PricebookID, l.SKU, l.Name, l.Category, l.Description, l.Unit,
 		l.BasePrice, l.DefaultMarginPct, l.MinMarginPct, l.MaxDiscountPct,
 		l.AllowedProviderCompanyIDs, l.OwnerRole,
-		l.SortOrder, l.Active, l.CreatedAt, l.UpdatedAt,
+		l.SortOrder, l.Active, l.PriorityScore, l.CreatedAt, l.UpdatedAt,
 	)
 	if err != nil {
 		return mapDBError(err, "pricebook_line", "insert pricebook line")
@@ -97,13 +131,14 @@ func (r *PricebookLineRepository) Update(ctx context.Context, l *domain.Priceboo
 		    base_price = $6, default_margin_pct = $7, min_margin_pct = $8,
 		    max_discount_pct = $9, allowed_provider_company_ids = $10,
 		    owner_role = $11, sort_order = $12, active = $13,
+		    priority_score = $14,
 		    updated_at = NOW()
 		WHERE id = $1
 	`,
 		l.ID, l.Name, l.Category, l.Description, l.Unit,
 		l.BasePrice, l.DefaultMarginPct, l.MinMarginPct,
 		l.MaxDiscountPct, l.AllowedProviderCompanyIDs,
-		l.OwnerRole, l.SortOrder, l.Active,
+		l.OwnerRole, l.SortOrder, l.Active, l.PriorityScore,
 	)
 	if err != nil {
 		return mapDBError(err, "pricebook_line", "update pricebook line")
@@ -133,7 +168,7 @@ func scanPricebookLine(row pgx.Row) (domain.PricebookLine, error) {
 		&l.SKU, &l.Name, &l.Category, &l.Description, &l.Unit,
 		&l.BasePrice, &l.DefaultMarginPct, &l.MinMarginPct, &l.MaxDiscountPct,
 		&l.AllowedProviderCompanyIDs, &l.OwnerRole,
-		&l.SortOrder, &l.Active, &l.CreatedAt, &l.UpdatedAt,
+		&l.SortOrder, &l.Active, &l.PriorityScore, &l.CreatedAt, &l.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.PricebookLine{}, derrors.NotFound("pricebook_line.not_found", "pricebook line not found")

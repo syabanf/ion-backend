@@ -65,6 +65,8 @@ type CreatePricebookLineInput struct {
 	AllowedProviderCompanyIDs []uuid.UUID
 	OwnerRole                 string
 	SortOrder                 int
+	// Wave 106 — internal-vendor priority badge for picker UIs.
+	PriorityScore int
 }
 
 type UpdatePricebookLineInput struct {
@@ -81,6 +83,8 @@ type UpdatePricebookLineInput struct {
 	OwnerRole                 *string
 	SortOrder                 *int
 	Active                    *bool
+	// Wave 106 — provider priority badge mutation.
+	PriorityScore *int
 }
 
 // =====================================================================
@@ -178,6 +182,10 @@ type UseCase interface {
 
 	// Pricebook lines
 	ListPricebookLines(ctx context.Context, pricebookID uuid.UUID) ([]domain.PricebookLine, error)
+	// Wave 106 — sort variant for the FE provider-picker. When `sort` is
+	// "priority" rows return ordered (priority_score DESC, sku ASC);
+	// otherwise the default (sort_order, name).
+	ListPricebookLinesSorted(ctx context.Context, pricebookID uuid.UUID, sort string) ([]domain.PricebookLine, error)
 	CreatePricebookLine(ctx context.Context, in CreatePricebookLineInput) (*domain.PricebookLine, error)
 	UpdatePricebookLine(ctx context.Context, in UpdatePricebookLineInput) (*domain.PricebookLine, error)
 	DeletePricebookLine(ctx context.Context, id uuid.UUID) error
@@ -195,6 +203,14 @@ type UseCase interface {
 	// Auto-Lost scheduler — invoked by the cron job. Returns the IDs
 	// that were flipped. Idempotent: calling twice has no extra effect.
 	RunAutoLostSweep(ctx context.Context) (flipped []uuid.UUID, err error)
+
+	// Wave 106 — single-row auto-Lost path. Used by the cron watcher
+	// when iterating ID-by-ID; idempotent on already-Lost rows.
+	MarkOpportunityAutoLost(ctx context.Context, id uuid.UUID) (*domain.Opportunity, error)
+
+	// Wave 106 — TC-OP-011 reassign endpoint. Captures prev owner in
+	// audit; rejects same-owner re-assign and terminal stages.
+	ReassignOpportunity(ctx context.Context, in ReassignOpportunityInput) (*domain.Opportunity, error)
 }
 
 // =====================================================================
@@ -214,6 +230,10 @@ type PricebookRepository interface {
 
 type PricebookLineRepository interface {
 	ListByPricebook(ctx context.Context, pricebookID uuid.UUID) ([]domain.PricebookLine, error)
+	// Wave 106 — sortable variant. Pass `"priority"` to order by
+	// priority_score DESC, sku ASC. Empty string or any other value
+	// falls back to the legacy (sort_order, name) ordering.
+	ListByPricebookSorted(ctx context.Context, pricebookID uuid.UUID, sort string) ([]domain.PricebookLine, error)
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.PricebookLine, error)
 	Create(ctx context.Context, line *domain.PricebookLine) error
 	Update(ctx context.Context, line *domain.PricebookLine) error
@@ -232,4 +252,53 @@ type OpportunityRepository interface {
 	// non-terminal stages whose last_activity_at is older than the
 	// stage's auto-Lost window. Used by RunAutoLostSweep.
 	FindExpiredAutoLostCandidates(ctx context.Context) ([]domain.Opportunity, error)
+}
+
+// =====================================================================
+// Wave 106 — Pre-BOQ structured validator config (TC-OP-009)
+// =====================================================================
+
+// PreBOQRequiredFieldRepository reads the admin-managed list that
+// drives the structured Pre-BOQ validator. Read-only at this wave —
+// the admin write surface lands when the FE settings page does. Seeded
+// via migration 0071.
+type PreBOQRequiredFieldRepository interface {
+	ListAll(ctx context.Context) ([]domain.PreBOQRequiredField, error)
+}
+
+// MarkOpportunityAutoLostInput is the Wave 106 cron entry point shape.
+// Carries just the ID — the usecase loads the row and runs the same
+// MarkLost path the auto-Lost sweeper uses.
+type MarkOpportunityAutoLostInput struct {
+	ID uuid.UUID
+}
+
+// ReassignOpportunityInput is the Wave 106 TC-OP-011 endpoint payload.
+type ReassignOpportunityInput struct {
+	ID          uuid.UUID
+	NewOwnerID  uuid.UUID
+	ByUserID    uuid.UUID
+	IfRevision  *int
+}
+
+// =====================================================================
+// Wave 92 — Multi-company holding (HoldingCompany + Subsidiary)
+// =====================================================================
+
+// HoldingCompanyRepository is the driven port for the holding-company
+// aggregate. Read-only at this wave — mutation lands in the follow-up
+// once FK rollout to existing enterprise tables is agreed.
+type HoldingCompanyRepository interface {
+	List(ctx context.Context) ([]domain.HoldingCompany, error)
+	FindByID(ctx context.Context, id uuid.UUID) (*domain.HoldingCompany, error)
+	Create(ctx context.Context, h *domain.HoldingCompany) error
+}
+
+// SubsidiaryRepository is the driven port for `enterprise.subsidiaries`.
+// `ListByHolding` accepts a nil filter to return every subsidiary
+// across all holdings (admin / super-admin scope).
+type SubsidiaryRepository interface {
+	ListByHolding(ctx context.Context, holdingCompanyID *uuid.UUID) ([]domain.Subsidiary, error)
+	FindByID(ctx context.Context, id uuid.UUID) (*domain.Subsidiary, error)
+	Create(ctx context.Context, s *domain.Subsidiary) error
 }

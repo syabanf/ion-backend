@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -140,3 +141,21 @@ func (f *fakeEWORepo) FindByQuotationID(_ context.Context, _ uuid.UUID) (*domain
 	return nil, nil
 }
 func (f *fakeEWORepo) Create(_ context.Context, _ *domain.EWO) error { return nil }
+
+// Wave 96 stubs — not exercised by the CompleteEWO tests.
+func (f *fakeEWORepo) FindBySide(_ context.Context, _ domain.EWOSide, _ port.EWOListFilter) ([]domain.EWO, error) {
+	return nil, nil
+}
+func (f *fakeEWORepo) FindByPair(_ context.Context, _ uuid.UUID) (*domain.EWO, error) {
+	return nil, nil
+}
+func (f *fakeEWORepo) UpdateSchedule(_ context.Context, _ uuid.UUID, _ port.ScheduleUpdate) error {
+	return nil
+}
+func (f *fakeEWORepo) LockSchedule(_ context.Context, _ uuid.UUID) error { return nil }
+func (f *fakeEWORepo) UpdatePair(_ context.Context, _, _ uuid.UUID) error { return nil }
+func (f *fakeEWORepo) FindOverlappingForTeamLead(
+	_ context.Context, _ uuid.UUID, _, _ time.Time, _ *uuid.UUID,
+) ([]domain.EWO, error) {
+	return nil, nil
+}

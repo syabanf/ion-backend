@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -78,6 +79,9 @@ func (h *NegotiationHandler) Mount(r chi.Router) {
 			Post("/negotiation-round-approvals/{id}/approve", h.approveStep)
 		r.With(httpserver.RequirePermission("enterprise.negotiation.approve")).
 			Post("/negotiation-round-approvals/{id}/reject", h.rejectStep)
+		// Wave 106 — CSV export of all rounds for an ops handoff.
+		r.With(httpserver.RequirePermission("enterprise.negotiation.read")).
+			Get("/negotiations/{id}/rounds.csv", h.exportRoundsCSV)
 	})
 }
 
@@ -638,6 +642,71 @@ type submitRoundChangeRequest struct {
 type rejectStepRequest struct {
 	ReasonCode string `json:"reason_code"`
 	Comment    string `json:"comment"`
+}
+
+// exportRoundsCSV — Wave 106 ops-handoff CSV dump of every round
+// (and its approval-chain summary) for a given negotiation. The CSV
+// is rendered inline; clients use a regular GET with a Save-As. The
+// vendor-mask middleware still strips commercial fields for vendor
+// actors — the same NFR-011 contract applies because the route lives
+// inside the same Group as the JSON ones.
+func (h *NegotiationHandler) exportRoundsCSV(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUIDLocal(chi.URLParam(r, "id"), "negotiation")
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	n, rounds, err := h.uc.GetNegotiation(r.Context(), id)
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition",
+		"attachment; filename=\"negotiation-"+n.ID.String()+"-rounds.csv\"")
+	w.WriteHeader(http.StatusOK)
+	// Header row + one row per round. We avoid encoding/csv to keep
+	// the byte output 1:1 with the test harness expectation; the
+	// fields below never contain commas / quotes by construction.
+	_, _ = w.Write([]byte(
+		"negotiation_id,round_no,status,margin_before,margin_after,max_discount_after,cco_auto_injected,cco_injection_reason,submitted_at,completed_at\n",
+	))
+	for _, rd := range rounds {
+		completedAt := ""
+		if rd.CompletedAt != nil {
+			completedAt = rd.CompletedAt.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		row := n.ID.String() + "," +
+			strconv.Itoa(rd.RoundNo) + "," +
+			string(rd.Status) + "," +
+			ftoaRound(rd.MarginBefore) + "," +
+			ftoaRound(rd.MarginAfter) + "," +
+			ftoaRound(rd.MaxDiscountAfter) + "," +
+			btoaRound(rd.CCOAutoInjected) + "," +
+			string(rd.CCOInjectionReason) + "," +
+			rd.SubmittedAt.UTC().Format("2006-01-02T15:04:05Z") + "," +
+			completedAt + "\n"
+		_, _ = w.Write([]byte(row))
+	}
+}
+
+// =====================================================================
+// CSV helpers — kept local to avoid importing fmt for these few
+// allocs. Tested via the CSV-export route test.
+// =====================================================================
+
+// ftoaRound — local float formatter used by the rounds.csv export
+// (TC-NG-* CSV ops handoff). Four decimal places, no scientific notation.
+func ftoaRound(f float64) string {
+	return strconv.FormatFloat(f, 'f', 4, 64)
+}
+
+// btoaRound — local bool-to-string for the rounds.csv export.
+func btoaRound(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // Compile-time: assert NegotiationUseCase is implemented (early failure

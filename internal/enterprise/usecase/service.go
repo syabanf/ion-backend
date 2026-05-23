@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ion-core/backend/internal/enterprise/domain"
 	"github.com/ion-core/backend/internal/enterprise/port"
@@ -89,6 +90,42 @@ type Service struct {
 	// Pre-launch E12 — RFQ.
 	rfqs port.RFQRepository
 
+	// Wave 95 — Customer PO + Intercompany PO. All three nil-safe; the
+	// customer_po / intercompany_po use-case methods return
+	// errCustomerPONotConfigured / errIntercompanyPONotConfigured when
+	// the corresponding repos aren't wired. cmd/enterprise-svc/main.go
+	// wires both together.
+	customerPOs      port.CustomerPORepository
+	intercompanyPOs  port.IntercompanyPORepository
+	intercompanyPair port.IntercompanyPairRepository
+
+	// Wave 96 — EWO schedule history repo. Optional; ScheduleEWO /
+	// RescheduleEWO methods return errEWOSchedulingNotConfigured when
+	// it's nil.
+	ewoScheduleHistory port.EWOScheduleHistoryRepository
+
+	// Wave 101 — tax_profile resolver (bridges to internal/tax). Nil-safe:
+	// when missing, the BOQ approval hook + invoice generation
+	// silently skip the snapshot chain (Non-PKP fallback) so legacy
+	// deployments keep approving.
+	taxResolver port.TaxResolver
+
+	// Wave 106 — Pre-BOQ required-field admin config. Nil-safe; when
+	// missing, CompletePreBOQ falls back to the legacy "any non-empty
+	// JSON" behaviour. Wired via WithPreBOQRequiredFields.
+	preBOQRequiredFields port.PreBOQRequiredFieldRepository
+
+	// Wave 106 — pgx pool needed for postgres advisory locks on the
+	// approval-decision critical sections (TC-EDGE-002 parallel approval).
+	// Nil-safe: when missing, the critical section runs unwrapped (the
+	// existing behaviour pre-Wave 106). Wired via WithLockPool.
+	lockPool *pgxpool.Pool
+
+	// Wave 107 — vendor metrics updater (bridges to internal/vendormgmt).
+	// Nil-safe: when missing, the IC-PO-accept hook skips the increment;
+	// the daily metrics deriver still recomputes from the completion log.
+	vendorMetrics port.VendorMetricsUpdater
+
 	log *slog.Logger
 }
 
@@ -151,6 +188,82 @@ func errBOQNotConfigured() error {
 	return derrors.Wrap(derrors.KindInternal, "boq.not_configured",
 		"BOQ surface is not configured for this service", nil)
 }
+
+// WithCustomerPOs wires the Wave 95 customer-PO repo. Nil-safe; the
+// surface returns errCustomerPONotConfigured when missing.
+func (s *Service) WithCustomerPOs(repo port.CustomerPORepository) *Service {
+	s.customerPOs = repo
+	return s
+}
+
+// WithIntercompanyPOs wires the Wave 95 IC-PO + pair repos together —
+// they're mutually dependent (AcceptCustomerPO consults the pair table
+// to decide whether to auto-issue the IC-PO it just drafted), so a
+// single setter keeps the wiring honest.
+func (s *Service) WithIntercompanyPOs(
+	icRepo port.IntercompanyPORepository,
+	pairRepo port.IntercompanyPairRepository,
+) *Service {
+	s.intercompanyPOs = icRepo
+	s.intercompanyPair = pairRepo
+	return s
+}
+
+// WithEWOScheduling attaches the Wave 96 reschedule-history repo. The
+// scheduling/reschedule/start usecases short-circuit with
+// errEWOSchedulingNotConfigured when this is nil so a Phase 1-less
+// deployment keeps building.
+func (s *Service) WithEWOScheduling(history port.EWOScheduleHistoryRepository) *Service {
+	s.ewoScheduleHistory = history
+	return s
+}
+
+// WithTaxResolver attaches the Wave 101 cross-context tax resolver.
+// Nil-safe — the BOQ-approval hook + invoice-time faktur decision
+// short-circuit when this is missing, which keeps Phase-2/3/4
+// deployments compiling without the tax bounded context wired.
+func (s *Service) WithTaxResolver(r port.TaxResolver) *Service {
+	s.taxResolver = r
+	return s
+}
+
+// WithVendorMetrics wires the Wave 107 cross-context vendor metrics
+// updater. Nil-safe — when missing, the IC-PO-accept hook skips the
+// provider counter increment; the daily metrics deriver still rebuilds
+// from the completion log on its own cadence.
+func (s *Service) WithVendorMetrics(u port.VendorMetricsUpdater) *Service {
+	s.vendorMetrics = u
+	return s
+}
+
+// WithPreBOQRequiredFields wires the Wave 106 Pre-BOQ structured
+// validator config (TC-OP-009). When nil, CompletePreBOQ falls back to
+// the legacy "any non-empty JSON" semantics so existing deployments
+// without migration 0071 applied keep working.
+func (s *Service) WithPreBOQRequiredFields(r port.PreBOQRequiredFieldRepository) *Service {
+	s.preBOQRequiredFields = r
+	return s
+}
+
+// WithLockPool attaches the pgx pool used for postgres advisory locks
+// on the approval-decision critical sections (Wave 106 retrofit of the
+// Wave 104 advisory_lock helper). Nil-safe: when missing, ApproveStep
+// / RejectStep run unwrapped (pre-Wave 106 behaviour), so existing
+// deployments without a pool reference keep working.
+func (s *Service) WithLockPool(pool *pgxpool.Pool) *Service {
+	s.lockPool = pool
+	return s
+}
+
+// Wave 95 — BOQ-approval recognition for `internal_transactions` is
+// staying live (see `recordInternalTransactionsOnApproval`) to avoid
+// breaking existing dashboards. The new IC-PO-accept recognition path
+// (`recordInternalTransactionsOnICPOAccept`) is the canonical trigger
+// per the Wave 91 audit's Wave 94 acceptance criteria: TC-VF-001 / 002
+// require recognition at IC-PO accept, not BOQ approval. A reconciliation
+// cron in Wave 95b will detect + report double-counting; once that
+// signal is stable, the BOQ-approval call site can be removed in a
+// dedicated breaking-change wave. See `internal_transaction.go`.
 
 // =====================================================================
 // Pricebooks
@@ -287,6 +400,15 @@ func (s *Service) ListPricebookLines(ctx context.Context, pricebookID uuid.UUID)
 	return s.lines.ListByPricebook(ctx, pricebookID)
 }
 
+// ListPricebookLinesSorted is the Wave 106 entry point for the
+// provider-priority sorted picker (TC-PB-010). `sort="priority"`
+// orders by (priority_score DESC, sku ASC); other values fall back
+// to the default (sort_order, name) so existing FE call sites
+// without a sort param keep working.
+func (s *Service) ListPricebookLinesSorted(ctx context.Context, pricebookID uuid.UUID, sort string) ([]domain.PricebookLine, error) {
+	return s.lines.ListByPricebookSorted(ctx, pricebookID, sort)
+}
+
 func (s *Service) CreatePricebookLine(ctx context.Context, in port.CreatePricebookLineInput) (*domain.PricebookLine, error) {
 	// Editing lines on a published pricebook is blocked — the line
 	// belongs to an immutable version. Caller must create a new
@@ -319,6 +441,8 @@ func (s *Service) CreatePricebookLine(ctx context.Context, in port.CreatePricebo
 	}
 	l.OwnerRole = in.OwnerRole
 	l.SortOrder = in.SortOrder
+	// Wave 106 — provider-priority badge. 0 = unranked.
+	l.PriorityScore = in.PriorityScore
 	if err := s.lines.Create(ctx, l); err != nil {
 		return nil, err
 	}
@@ -373,6 +497,18 @@ func (s *Service) UpdatePricebookLine(ctx context.Context, in port.UpdatePricebo
 	}
 	if in.SortOrder != nil {
 		l.SortOrder = *in.SortOrder
+	}
+	if in.PriorityScore != nil {
+		// Wave 106 — provider-priority badge mutation. We accept any
+		// non-negative integer; the DB column has no upper bound so the
+		// FE can rank with arbitrary spacing.
+		if *in.PriorityScore < 0 {
+			return nil, derrors.Validation(
+				"pricebook_line.priority_score_negative",
+				"priority_score must be >= 0",
+			)
+		}
+		l.PriorityScore = *in.PriorityScore
 	}
 	if in.Active != nil {
 		l.Active = *in.Active
@@ -538,6 +674,21 @@ func (s *Service) AdvanceStage(ctx context.Context, in port.AdvanceStageInput) (
 	}
 	switch in.TargetStage {
 	case "warm":
+		// Wave 106 — TC-OP-010: require an RFQ before promoting to Warm.
+		// Nil-safe: when the rfqs repo isn't wired the check is skipped
+		// (existing test deployments without pre-launch still work).
+		if s.rfqs != nil {
+			rfqs, _, lerr := s.rfqs.List(ctx, "", &o.ID, nil, 1, 0)
+			if lerr != nil {
+				return nil, lerr
+			}
+			if len(rfqs) == 0 {
+				return nil, derrors.Validation(
+					"opportunity.warm_requires_rfq",
+					"cannot advance to warm without an RFQ raised on this opportunity",
+				)
+			}
+		}
 		err = o.AdvanceToWarm()
 	case "hot":
 		err = o.AdvanceToHot()
@@ -577,6 +728,19 @@ func (s *Service) CompletePreBOQ(ctx context.Context, in port.CompletePreBOQInpu
 	if err != nil {
 		return nil, err
 	}
+	// Wave 106 — TC-OP-009 structured validator. When the admin config
+	// table is wired (migration 0071 applied + WithPreBOQRequiredFields
+	// builder called) we enforce that every required=TRUE field is
+	// present in the snapshot. Nil-safe — falls back to the legacy
+	// "any non-empty JSON" check via the domain method below.
+	if s.preBOQRequiredFields != nil {
+		fields, lerr := s.preBOQRequiredFields.ListAll(ctx)
+		if lerr == nil && len(fields) > 0 {
+			if verr := domain.ValidatePreBOQSnapshot(in.Snapshot, fields); verr != nil {
+				return nil, verr
+			}
+		}
+	}
 	if err := o.CompletePreBOQ(in.Snapshot); err != nil {
 		return nil, err
 	}
@@ -609,6 +773,101 @@ func (s *Service) PinPricebook(ctx context.Context, in port.PinPricebookInput) (
 	if err := s.opps.Update(ctx, o, in.IfRevision); err != nil {
 		return nil, err
 	}
+	return o, nil
+}
+
+// MarkOpportunityAutoLost is the Wave 106 single-row auto-Lost path.
+// Used by the OpportunityAutoLostWatcher cron when iterating expired
+// candidates ID-by-ID. Idempotent on already-Lost rows (returns the
+// existing entity without a state-machine error).
+//
+// CPQ TC-OP-007 + TC-SM-OPP-007 — same boundary semantics as
+// RunAutoLostSweep but per-id so the cron can audit each one
+// individually.
+func (s *Service) MarkOpportunityAutoLost(ctx context.Context, id uuid.UUID) (*domain.Opportunity, error) {
+	o, err := s.opps.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if o.Stage == domain.OpportunityStageLost || o.Stage == domain.OpportunityStageWon {
+		return o, nil // idempotent
+	}
+	if !o.IsAutoLostExpired(time.Now()) {
+		// Drift defense — refuse to flip if the SLA window hasn't
+		// actually elapsed yet (cron drift / clock skew).
+		return nil, derrors.Conflict(
+			"opportunity.auto_lost_window_not_expired",
+			"opportunity's auto-Lost SLA window has not elapsed",
+		)
+	}
+	if err := o.MarkLost(domain.LostReasonStageTimeout, "Auto-Lost — stage SLA window expired", true); err != nil {
+		return nil, err
+	}
+	if err := s.opps.Update(ctx, o, nil); err != nil {
+		return nil, err
+	}
+	audit.SafeWrite(ctx, s.audit, audit.Entry{
+		Module:       "enterprise",
+		RecordType:   "opportunity",
+		RecordID:     o.ID.String(),
+		FieldChanged: "stage",
+		Before:       "non_terminal",
+		After:        string(domain.OpportunityStageLost),
+		Reason:       "auto_lost_watcher",
+	})
+	return o, nil
+}
+
+// ReassignOpportunity is the Wave 106 TC-OP-011 endpoint. Rotates the
+// owner with a categorical audit trail (`prev_owner_id` → `new_owner_id`).
+// Domain rejects same-owner re-assigns and terminal stages; the
+// usecase wraps with audit + optimistic-concurrency.
+func (s *Service) ReassignOpportunity(ctx context.Context, in port.ReassignOpportunityInput) (*domain.Opportunity, error) {
+	o, err := s.opps.FindByID(ctx, in.ID)
+	if err != nil {
+		return nil, err
+	}
+	prev, err := o.Reassign(in.NewOwnerID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.opps.Update(ctx, o, in.IfRevision); err != nil {
+		return nil, err
+	}
+	prevStr := ""
+	if prev != nil {
+		prevStr = prev.String()
+	}
+	audit.SafeWrite(ctx, s.audit, audit.Entry{
+		UserID:       in.ByUserID,
+		Module:       "enterprise",
+		RecordType:   "opportunity",
+		RecordID:     o.ID.String(),
+		FieldChanged: "owner_user_id",
+		Before:       prevStr,
+		After:        in.NewOwnerID.String(),
+		Reason:       "opportunity.owner_reassigned",
+	})
+	// Notify both old (if any) + new owner so the inbox carries the
+	// rotation. Best-effort; Notify is nil-safe.
+	if prev != nil {
+		s.Notify(ctx, domain.NewNotification(
+			*prev,
+			"opportunity.reassigned_away",
+			"opportunity", o.ID,
+			"Opportunity reassigned away",
+			"You are no longer the owner of opportunity "+o.OpportunityNumber+".",
+			domain.NotificationSeverityInfo,
+		))
+	}
+	s.Notify(ctx, domain.NewNotification(
+		in.NewOwnerID,
+		"opportunity.reassigned_to_me",
+		"opportunity", o.ID,
+		"Opportunity reassigned to you",
+		"You are the new owner of opportunity "+o.OpportunityNumber+".",
+		domain.NotificationSeverityInfo,
+	))
 	return o, nil
 }
 

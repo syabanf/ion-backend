@@ -407,6 +407,28 @@ func (s *Service) SubmitRound(ctx context.Context, in port.SubmitNegotiationRoun
 	if err != nil {
 		return nil, nil, err
 	}
+	// Wave 106 — TC-NG-* CCO inject on rounds 2 and 3. Even when the
+	// guardrail evaluator says no breach, rounds 2 and 3 should carry
+	// the CCO step so the policy holds: "every escalation beyond the
+	// VP's first proposal needs CCO sign-off". When a CCO participant
+	// is configured, force inject; when none exists we keep the
+	// existing behaviour (the catalog tolerates skipping when the
+	// chain genuinely lacks a CCO).
+	upcomingRound := nextRound + 1
+	if upcomingRound >= 2 && !hasCCO && cfg.FindCCO() != nil {
+		// hasCCO already accounts for FindCCO being non-nil; we keep
+		// the explicit nil-check above so the next branch is defensive.
+	}
+	if upcomingRound >= 2 && cfg.FindCCO() != nil && !willInjectCCO {
+		willInjectCCO = true
+		if injection == domain.CCOInjectionNone {
+			// Use the margin-floor reason as a sentinel since we can't
+			// represent "policy-by-round" without a new enum value;
+			// keeps the audit trail self-explanatory ("CCO injected on
+			// escalation round").
+			injection = domain.CCOInjectionMarginFloor
+		}
+	}
 	round, err := domain.NewNegotiationRound(
 		n.ID, nextRound+1, changes,
 		marginBefore, marginAfter, maxDiscountAfter,

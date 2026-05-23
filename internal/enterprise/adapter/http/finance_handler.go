@@ -1,9 +1,11 @@
 package http
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/ion-core/backend/internal/enterprise/domain"
 	"github.com/ion-core/backend/internal/enterprise/port"
@@ -11,6 +13,25 @@ import (
 	"github.com/ion-core/backend/pkg/errors"
 	"github.com/ion-core/backend/pkg/httpserver"
 )
+
+// financePolishSurface is the optional Wave 107 polish surface. It
+// matches the methods declared on usecase.Service in
+// usecase/finance_polish.go. Used via type assertion from the
+// FinanceHandler so the FinanceUseCase port stays stable.
+type financePolishSurface interface {
+	SubmitPaymentProofHTTP(ctx context.Context,
+		invoiceID uuid.UUID,
+		fileURL, fileHash, fileName, contentType, notes string,
+		fileSize int64,
+		uploadedBy *uuid.UUID,
+	) (*domain.PaymentProof, error)
+	VerifyPaymentProofHTTP(ctx context.Context,
+		proofID, byUserID uuid.UUID,
+		decision, reason string,
+		amount float64,
+	) error
+	SetInvoicePPh23(ctx context.Context, invoiceID uuid.UUID, applicable bool, amount float64) (*domain.Invoice, error)
+}
 
 // FinanceHandler is the Phase 5 HTTP surface — Invoices, Payments, EWOs.
 //
@@ -59,6 +80,14 @@ func (h *FinanceHandler) Mount(r chi.Router) {
 			Post("/invoices/{id}/void", h.voidInvoice)
 		r.With(httpserver.RequirePermission("enterprise.payment.record")).
 			Post("/invoices/{id}/payments", h.recordPayment)
+
+		// Wave 107 — Finance Client AR polish.
+		r.With(httpserver.RequirePermission("enterprise.payment.record")).
+			Post("/invoices/{id}/payment-proof", h.submitPaymentProof)
+		r.With(httpserver.RequirePermission("enterprise.payment.record")).
+			Post("/payment-proofs/{id}/verify", h.verifyPaymentProof)
+		r.With(httpserver.RequirePermission("enterprise.invoice.manage")).
+			Post("/invoices/{id}/pph23", h.setInvoicePPh23)
 
 		// EWOs
 		r.With(httpserver.RequirePermission("enterprise.ewo.read")).
@@ -568,6 +597,19 @@ type ewoDTO struct {
 	Revision         int     `json:"revision"`
 	CreatedAt        string  `json:"created_at"`
 	UpdatedAt        string  `json:"updated_at"`
+
+	// Wave 96 — dual EWO + scheduling. Added fields; pre-existing
+	// field names left untouched. side="x" for legacy single-EWO rows.
+	Side                     string  `json:"side"`
+	ExecutingSubsidiaryID    *string `json:"executing_subsidiary_id,omitempty"`
+	IntercompanyPOID         *string `json:"intercompany_po_id,omitempty"`
+	PairedEWOID              *string `json:"paired_ewo_id,omitempty"`
+	ScheduledStart           *string `json:"scheduled_start_date,omitempty"`
+	ScheduledEnd             *string `json:"scheduled_end_date,omitempty"`
+	DurationDays             *int    `json:"duration_days,omitempty"`
+	AssignedTechnicianUserID *string `json:"assigned_technician_user_id,omitempty"`
+	AssignedTeamLeadUserID   *string `json:"assigned_team_lead_user_id,omitempty"`
+	ScheduleLocked           bool    `json:"schedule_locked"`
 }
 
 func toEWODTO(e domain.EWO) ewoDTO {
@@ -581,7 +623,7 @@ func toEWODTO(e domain.EWO) ewoDTO {
 		s := e.FieldWorkOrderID.String()
 		fieldWO = &s
 	}
-	return ewoDTO{
+	d := ewoDTO{
 		ID:               e.ID.String(),
 		EWONumber:        e.EWONumber,
 		QuotationID:      e.QuotationID.String(),
@@ -598,7 +640,46 @@ func toEWODTO(e domain.EWO) ewoDTO {
 		Revision:         e.Revision,
 		CreatedAt:        rfc3339(e.CreatedAt),
 		UpdatedAt:        rfc3339(e.UpdatedAt),
+		Side:             string(e.Side),
+		ScheduleLocked:   e.ScheduleLocked,
+		DurationDays:     e.DurationDays,
 	}
+	if d.Side == "" {
+		// Defend against zero-value side from older code paths — the
+		// migration backfills 'x' for legacy rows but a freshly
+		// constructed EWO without going through NewEWO would have ""
+		// here, which the FE shouldn't see.
+		d.Side = "x"
+	}
+	if e.ExecutingSubsidiaryID != nil {
+		s := e.ExecutingSubsidiaryID.String()
+		d.ExecutingSubsidiaryID = &s
+	}
+	if e.IntercompanyPOID != nil {
+		s := e.IntercompanyPOID.String()
+		d.IntercompanyPOID = &s
+	}
+	if e.PairedEWOID != nil {
+		s := e.PairedEWOID.String()
+		d.PairedEWOID = &s
+	}
+	if e.ScheduledStartDate != nil {
+		s := rfc3339(*e.ScheduledStartDate)
+		d.ScheduledStart = &s
+	}
+	if e.ScheduledEndDate != nil {
+		s := rfc3339(*e.ScheduledEndDate)
+		d.ScheduledEnd = &s
+	}
+	if e.AssignedTechnicianUserID != nil {
+		s := e.AssignedTechnicianUserID.String()
+		d.AssignedTechnicianUserID = &s
+	}
+	if e.AssignedTeamLeadUserID != nil {
+		s := e.AssignedTeamLeadUserID.String()
+		d.AssignedTeamLeadUserID = &s
+	}
+	return d
 }
 
 // =====================================================================
@@ -637,4 +718,124 @@ type cancelEWORequest struct {
 
 type linkFieldWORequest struct {
 	FieldWorkOrderID string `json:"field_work_order_id"`
+}
+
+// =====================================================================
+// Wave 107 — Finance polish handlers (payment proof + PPh23).
+//
+// We dispatch via type-assertion against the underlying Service rather
+// than extending the FinanceUseCase port. That keeps the change additive
+// — the existing port stays a stable contract; the polish methods are
+// optional extensions reachable only when wired via the canonical
+// Service.
+// =====================================================================
+
+type submitPaymentProofRequest struct {
+	FileURL     string `json:"file_url"`
+	FileHash    string `json:"file_hash,omitempty"`
+	FileName    string `json:"file_name,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	FileSize    int64  `json:"file_size,omitempty"`
+	Notes       string `json:"notes,omitempty"`
+}
+
+type verifyPaymentProofRequest struct {
+	Decision string  `json:"decision"` // "approved" | "rejected"
+	Reason   string  `json:"reason,omitempty"`
+	Amount   float64 `json:"amount,omitempty"`
+}
+
+type setPPh23Request struct {
+	Applicable bool    `json:"applicable"`
+	Amount     float64 `json:"amount,omitempty"`
+}
+
+func (h *FinanceHandler) submitPaymentProof(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUIDLocal(chi.URLParam(r, "id"), "invoice")
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	var req submitPaymentProofRequest
+	if err := httpserver.DecodeJSON(r, &req); err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	uc, ok := h.uc.(financePolishSurface)
+	if !ok {
+		httpserver.WriteError(w, errors.Wrap(errors.KindInternal, "finance.polish_not_wired", "polish surface unavailable", nil))
+		return
+	}
+	proof, err := uc.SubmitPaymentProofHTTP(
+		r.Context(),
+		id,
+		req.FileURL, req.FileHash, req.FileName, req.ContentType, req.Notes,
+		req.FileSize,
+		actorUserIDLocal(r.Context()),
+	)
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	httpserver.WriteJSON(w, http.StatusCreated, map[string]any{
+		"id":        proof.ID.String(),
+		"file_url":  proof.FileURL,
+		"file_name": proof.FileName,
+		"created":   proof.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+	})
+}
+
+func (h *FinanceHandler) verifyPaymentProof(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUIDLocal(chi.URLParam(r, "id"), "proof")
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	var req verifyPaymentProofRequest
+	if err := httpserver.DecodeJSON(r, &req); err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	actor := actorUserIDLocal(r.Context())
+	if actor == nil {
+		httpserver.WriteError(w, errors.Forbidden("payment_proof.actor_required", "actor required"))
+		return
+	}
+	uc, ok := h.uc.(financePolishSurface)
+	if !ok {
+		httpserver.WriteError(w, errors.Wrap(errors.KindInternal, "finance.polish_not_wired", "polish surface unavailable", nil))
+		return
+	}
+	if err := uc.VerifyPaymentProofHTTP(
+		r.Context(), id, *actor,
+		req.Decision, req.Reason, req.Amount,
+	); err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *FinanceHandler) setInvoicePPh23(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUIDLocal(chi.URLParam(r, "id"), "invoice")
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	var req setPPh23Request
+	if err := httpserver.DecodeJSON(r, &req); err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	uc, ok := h.uc.(financePolishSurface)
+	if !ok {
+		httpserver.WriteError(w, errors.Wrap(errors.KindInternal, "finance.polish_not_wired", "polish surface unavailable", nil))
+		return
+	}
+	inv, err := uc.SetInvoicePPh23(r.Context(), id, req.Applicable, req.Amount)
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	httpserver.WriteJSON(w, http.StatusOK, toInvoiceDTO(*inv))
 }

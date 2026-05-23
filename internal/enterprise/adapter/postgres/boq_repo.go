@@ -35,7 +35,9 @@ const boqCols = `
 	source_rfq_id,
 	submitted_at, approved_at, rejected_at, superseded_at,
 	COALESCE(rejection_reason_code,''), COALESCE(rejection_comment,''),
-	COALESCE(notes,''), revision, created_by, created_at, updated_at
+	COALESCE(notes,''), revision, created_by, created_at, updated_at,
+	tax_profile_id, tax_snapshot_hash,
+	commercial_owner_subsidiary_id
 `
 
 func (r *BOQRepository) List(ctx context.Context, f port.BOQListFilter) ([]domain.BOQ, int, error) {
@@ -137,9 +139,12 @@ func (r *BOQRepository) Create(ctx context.Context, b *domain.BOQ) error {
 			 cost_total, margin_pct, snapshot_hash,
 			 approval_template_id, submitted_at, approved_at, rejected_at, superseded_at,
 			 rejection_reason_code, rejection_comment,
-			 notes, revision, created_by, created_at, updated_at)
+			 notes, revision, created_by, created_at, updated_at,
+			 tax_profile_id, tax_snapshot_hash,
+			 commercial_owner_subsidiary_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-		        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+		        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
+		        $26, $27, $28)
 	`,
 		b.ID, b.BOQNumber, b.OpportunityID, b.PricebookID, b.VersionNo, string(b.Status),
 		b.SellTotal, b.SubtotalAmount, b.TaxPct, b.TaxAmount,
@@ -147,6 +152,8 @@ func (r *BOQRepository) Create(ctx context.Context, b *domain.BOQ) error {
 		b.ApprovalTemplateID, b.SubmittedAt, b.ApprovedAt, b.RejectedAt, b.SupersededAt,
 		string(b.RejectionReasonCode), b.RejectionComment,
 		b.Notes, b.Revision, b.CreatedBy, b.CreatedAt, b.UpdatedAt,
+		b.TaxProfileID, b.TaxSnapshotHash,
+		b.CommercialOwnerSubsidiaryID,
 	)
 	if err != nil {
 		return mapDBError(err, "boq", "insert boq")
@@ -168,7 +175,9 @@ func (r *BOQRepository) Update(ctx context.Context, b *domain.BOQ, ifRevision *i
 			    snapshot_hash = $6, approval_template_id = $7,
 			    submitted_at = $8, approved_at = $9, rejected_at = $10, superseded_at = $11,
 			    rejection_reason_code = $12, rejection_comment = $13,
-			    notes = $14, revision = $15, updated_at = NOW()
+			    notes = $14, revision = $15, updated_at = NOW(),
+			    tax_profile_id = $20, tax_snapshot_hash = $21,
+			    commercial_owner_subsidiary_id = $22
 			WHERE id = $1 AND revision = $16
 		`,
 			b.ID, string(b.Status), b.SellTotal, b.CostTotal, b.MarginPct,
@@ -178,6 +187,8 @@ func (r *BOQRepository) Update(ctx context.Context, b *domain.BOQ, ifRevision *i
 			b.Notes, b.Revision,
 			*ifRevision,
 			b.SubtotalAmount, b.TaxPct, b.TaxAmount,
+			b.TaxProfileID, b.TaxSnapshotHash,
+			b.CommercialOwnerSubsidiaryID,
 		)
 	} else {
 		tag, err = r.pool.Exec(ctx, `
@@ -188,7 +199,9 @@ func (r *BOQRepository) Update(ctx context.Context, b *domain.BOQ, ifRevision *i
 			    snapshot_hash = $6, approval_template_id = $7,
 			    submitted_at = $8, approved_at = $9, rejected_at = $10, superseded_at = $11,
 			    rejection_reason_code = $12, rejection_comment = $13,
-			    notes = $14, revision = $15, updated_at = NOW()
+			    notes = $14, revision = $15, updated_at = NOW(),
+			    tax_profile_id = $19, tax_snapshot_hash = $20,
+			    commercial_owner_subsidiary_id = $21
 			WHERE id = $1
 		`,
 			b.ID, string(b.Status), b.SellTotal, b.CostTotal, b.MarginPct,
@@ -197,6 +210,8 @@ func (r *BOQRepository) Update(ctx context.Context, b *domain.BOQ, ifRevision *i
 			string(b.RejectionReasonCode), b.RejectionComment,
 			b.Notes, b.Revision,
 			b.SubtotalAmount, b.TaxPct, b.TaxAmount,
+			b.TaxProfileID, b.TaxSnapshotHash,
+			b.CommercialOwnerSubsidiaryID,
 		)
 	}
 	if err != nil {
@@ -228,6 +243,8 @@ func scanBOQ(row pgx.Row) (domain.BOQ, error) {
 		&b.SubmittedAt, &b.ApprovedAt, &b.RejectedAt, &b.SupersededAt,
 		&rcode, &b.RejectionComment,
 		&b.Notes, &b.Revision, &b.CreatedBy, &b.CreatedAt, &b.UpdatedAt,
+		&b.TaxProfileID, &b.TaxSnapshotHash,
+		&b.CommercialOwnerSubsidiaryID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.BOQ{}, derrors.NotFound("boq.not_found", "boq not found")

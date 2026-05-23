@@ -31,4 +31,27 @@ type InternalTransaction struct {
 	RecognizedAt    time.Time
 	Notes           string
 	CreatedAt       time.Time
+
+	// Wave 95b / Wave 101 — reconciliation columns.
+	//
+	// SourceEvent distinguishes the two write paths so the reconciler
+	// can pick a canonical row:
+	//   - "boq_approval" — legacy, pre-Wave-95; recorded in the
+	//     BOQ-approval hook (recordInternalTransactionsOnApproval)
+	//   - "ic_po_accept" — canonical, Wave 95+; recorded when
+	//     AcceptIntercompanyPO fires
+	// Pre-Wave-95 rows were backfilled to "boq_approval" in migration
+	// 0067 since that was the only existing path.
+	//
+	// SupersededAt is set by the daily reconciliation cron when a
+	// canonical IC-PO-accept row replaces a legacy BOQ-approval row
+	// covering the same boq_line_id.
+	SourceEvent   string
+	SupersededAt  *time.Time
 }
+
+// InternalTransactionSourceEvent constants.
+const (
+	InternalTransactionSourceBOQApproval = "boq_approval"
+	InternalTransactionSourceICPOAccept  = "ic_po_accept"
+)

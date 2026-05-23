@@ -113,6 +113,12 @@ func (s *Service) GenerateQuotation(ctx context.Context, in port.GenerateQuotati
 	q.MarginPct = boq.MarginPct
 	q.IssuedBy = in.IssuedBy
 	q.Notes = in.Notes
+	// Wave 101 — inherit the BOQ's frozen tax_snapshot_hash so the
+	// invoice + faktur can verify the chain. Best-effort: when the
+	// BOQ has no snapshot (tax resolver wasn't wired), this is a no-op.
+	if err := s.inheritTaxSnapshotForQuotation(boq, q); err != nil {
+		return nil, err
+	}
 	if in.ValidityDays > 0 {
 		q.ValidUntil = q.IssuedAt.Add(time.Duration(in.ValidityDays) * 24 * time.Hour)
 	}
@@ -160,7 +166,15 @@ func (s *Service) GenerateQuotation(ctx context.Context, in port.GenerateQuotati
 		PICEmail:          op.PICEmail,
 		Lines:             pdfLines,
 		SellTotal:         q.SellTotal,
-		Notes:             q.Notes,
+		// Wave 106 — TC-QT-010/011 tax block on PDF. We thread the
+		// BOQ-level breakdown so the footer renders Subtotal + Pajak +
+		// Grand Total. When the BOQ has no tax snapshot the values are
+		// zero and the renderer falls back to the legacy single-line
+		// footer.
+		SubtotalAmount: boq.SubtotalAmount,
+		TaxPct:         boq.TaxPct,
+		TaxAmount:      boq.TaxAmount,
+		Notes:          q.Notes,
 	})
 	if err != nil {
 		return nil, derrors.Wrap(derrors.KindInternal, "quotation.render", "render quotation pdf", err)
@@ -277,6 +291,67 @@ func (s *Service) RejectQuotation(ctx context.Context, in port.RejectQuotationIn
 		return nil, err
 	}
 	return q, nil
+}
+
+// RunQuotationExpirySweep is the Wave 106 cron entry point for
+// flipping issued quotations past `valid_until` to expired (TC-QT-* state
+// machine: draft → issued → accepted/rejected/expired). Idempotent:
+// already-expired rows are skipped. Returns the IDs flipped this run.
+//
+// We use the existing QuotationListFilter (status="issued") plus an
+// in-process IsExpired check rather than a SQL WHERE on the timestamp;
+// the volume is low enough that the round-trip cost is irrelevant and
+// it lets us reuse the same domain rule as the FE's computed flag.
+func (s *Service) RunQuotationExpirySweep(ctx context.Context) ([]uuid.UUID, error) {
+	if s.quotations == nil {
+		return nil, nil
+	}
+	// Page through issued quotations 200 at a time so a hot deployment
+	// doesn't OOM on a long backlog.
+	const pageSize = 200
+	now := time.Now().UTC()
+	flipped := []uuid.UUID{}
+	offset := 0
+	for {
+		items, _, err := s.quotations.List(ctx, port.QuotationListFilter{
+			Status: string(domain.QuotationStatusIssued),
+			Limit:  pageSize,
+			Offset: offset,
+		})
+		if err != nil {
+			return flipped, err
+		}
+		if len(items) == 0 {
+			break
+		}
+		for i := range items {
+			q := &items[i]
+			if !q.IsExpired(now) {
+				continue
+			}
+			// Direct status flip via domain — Quotation.Supersede is
+			// the wrong path here (supersede is for v(N+1) issuance).
+			// Inline the transition with the same shape as MarkRejected.
+			q.Status = domain.QuotationStatusExpired
+			q.UpdatedAt = now
+			q.Revision++
+			if err := s.quotations.Update(ctx, q, nil); err != nil {
+				if s.log != nil {
+					s.log.Warn("quotation expiry update failed",
+						"quotation_id", q.ID.String(),
+						"err", err.Error(),
+					)
+				}
+				continue
+			}
+			flipped = append(flipped, q.ID)
+		}
+		if len(items) < pageSize {
+			break
+		}
+		offset += pageSize
+	}
+	return flipped, nil
 }
 
 func (s *Service) CancelQuotation(ctx context.Context, in port.CancelQuotationInput) (*domain.Quotation, error) {

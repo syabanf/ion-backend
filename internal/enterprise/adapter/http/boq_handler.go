@@ -101,6 +101,9 @@ func (h *BOQHandler) Mount(r chi.Router) {
 			Post("/boqs/{id}/submit", h.submitBOQ)
 		r.With(httpserver.RequirePermission("enterprise.boq.write")).
 			Post("/boqs/{id}/start-revision", h.startRevision)
+		// Wave 106 — TC-BQ-014 material-edit-via-supersede.
+		r.With(httpserver.RequirePermission("enterprise.boq.write")).
+			Post("/boqs/{id}/edit-after-quotation", h.editAfterQuotation)
 
 		// BOQ lines
 		r.With(httpserver.RequirePermission("enterprise.boq.write")).
@@ -393,7 +396,10 @@ func (h *BOQHandler) getBOQ(w http.ResponseWriter, r *http.Request) {
 	}
 	lineOut := make([]boqLineDTO, 0, len(lines))
 	for _, l := range lines {
-		lineOut = append(lineOut, toBOQLineDTO(l))
+		// Wave 106 — pass the parent BOQ so ic_po_required (TC-BQ-013)
+		// derives correctly. Pre-Wave-106 callers (nil parent) get the
+		// flag defaulted to false.
+		lineOut = append(lineOut, toBOQLineDTO(l, b))
 	}
 	httpserver.WriteJSON(w, http.StatusOK, map[string]any{
 		"boq":   toBOQDTO(*b),
@@ -505,6 +511,23 @@ func (h *BOQHandler) startRevision(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, http.StatusCreated, toBOQDTO(*b))
 }
 
+// editAfterQuotation — Wave 106 TC-BQ-014. Spawns a fresh revision_draft
+// from an approved BOQ that's already had a quotation issued; the
+// previous row flips to superseded.
+func (h *BOQHandler) editAfterQuotation(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUIDLocal(chi.URLParam(r, "id"), "boq")
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	b, err := h.uc.EditBOQAfterQuotation(r.Context(), id)
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	httpserver.WriteJSON(w, http.StatusCreated, toBOQDTO(*b))
+}
+
 // =====================================================================
 // BOQ line handlers
 // =====================================================================
@@ -542,7 +565,7 @@ func (h *BOQHandler) createBOQLine(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, err)
 		return
 	}
-	httpserver.WriteJSON(w, http.StatusCreated, toBOQLineDTO(*l))
+	httpserver.WriteJSON(w, http.StatusCreated, toBOQLineDTO(*l, nil))
 }
 
 func (h *BOQHandler) updateBOQLine(w http.ResponseWriter, r *http.Request) {
@@ -593,7 +616,7 @@ func (h *BOQHandler) updateBOQLine(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, err)
 		return
 	}
-	httpserver.WriteJSON(w, http.StatusOK, toBOQLineDTO(*l))
+	httpserver.WriteJSON(w, http.StatusOK, toBOQLineDTO(*l, nil))
 }
 
 func (h *BOQHandler) deleteBOQLine(w http.ResponseWriter, r *http.Request) {
@@ -634,7 +657,7 @@ func (h *BOQHandler) setVendorCost(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, err)
 		return
 	}
-	httpserver.WriteJSON(w, http.StatusOK, toBOQLineDTO(*l))
+	httpserver.WriteJSON(w, http.StatusOK, toBOQLineDTO(*l, nil))
 }
 
 // =====================================================================

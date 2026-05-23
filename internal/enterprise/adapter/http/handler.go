@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/ion-core/backend/internal/enterprise/domain"
 	"github.com/ion-core/backend/internal/enterprise/port"
 	"github.com/ion-core/backend/pkg/auth"
 	"github.com/ion-core/backend/pkg/errors"
@@ -94,6 +95,9 @@ func (h *Handler) Mount(r chi.Router) {
 			Put("/opportunities/{id}/pre-boq", h.completePreBOQ)
 		r.With(httpserver.RequirePermission("enterprise.opportunity.write")).
 			Post("/opportunities/{id}/pricebook", h.pinPricebook)
+		// Wave 106 — TC-OP-011 reassign endpoint.
+		r.With(httpserver.RequirePermission("enterprise.opportunity.write")).
+			Post("/opportunities/{id}/reassign", h.reassignOpportunity)
 
 		// Maintenance — exposed for cron / ops dashboard. In a future
 		// deploy this could move behind a service-token rather than a
@@ -228,7 +232,17 @@ func (h *Handler) listPricebookLines(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, err)
 		return
 	}
-	items, err := h.uc.ListPricebookLines(r.Context(), id)
+	// Wave 106 — TC-PB-010: provider-priority sort. `?sort=priority`
+	// orders by (priority_score DESC, sku ASC) so the picker UI surfaces
+	// recommended internal vendors first. Empty / any other value keeps
+	// the legacy ordering.
+	sort := r.URL.Query().Get("sort")
+	var items []domain.PricebookLine
+	if sort != "" {
+		items, err = h.uc.ListPricebookLinesSorted(r.Context(), id, sort)
+	} else {
+		items, err = h.uc.ListPricebookLines(r.Context(), id)
+	}
 	if err != nil {
 		httpserver.WriteError(w, err)
 		return
@@ -274,6 +288,7 @@ func (h *Handler) createPricebookLine(w http.ResponseWriter, r *http.Request) {
 		AllowedProviderCompanyIDs: allowed,
 		OwnerRole:                 req.OwnerRole,
 		SortOrder:                 req.SortOrder,
+		PriorityScore:             req.PriorityScore,
 	}
 	l, err := h.uc.CreatePricebookLine(r.Context(), in)
 	if err != nil {
@@ -307,6 +322,7 @@ func (h *Handler) updatePricebookLine(w http.ResponseWriter, r *http.Request) {
 		OwnerRole:        req.OwnerRole,
 		SortOrder:        req.SortOrder,
 		Active:           req.Active,
+		PriorityScore:    req.PriorityScore,
 	}
 	if req.AllowedProviderCompanyIDs != nil {
 		allowed := make([]uuid.UUID, 0, len(*req.AllowedProviderCompanyIDs))
@@ -621,6 +637,38 @@ func (h *Handler) pinPricebook(w http.ResponseWriter, r *http.Request) {
 		PricebookID: pbID,
 		IfRevision:  req.IfRevision,
 	})
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	httpserver.WriteJSON(w, http.StatusOK, toOpportunityDTO(*o))
+}
+
+func (h *Handler) reassignOpportunity(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"), "opportunity")
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	var req reassignOpportunityRequest
+	if err := httpserver.DecodeJSON(r, &req); err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	newOwnerID, err := parseUUID(req.NewOwnerID, "new_owner_user_id")
+	if err != nil {
+		httpserver.WriteError(w, err)
+		return
+	}
+	in := port.ReassignOpportunityInput{
+		ID:         id,
+		NewOwnerID: newOwnerID,
+		IfRevision: req.IfRevision,
+	}
+	if uid := actorUserID(r.Context()); uid != nil {
+		in.ByUserID = *uid
+	}
+	o, err := h.uc.ReassignOpportunity(r.Context(), in)
 	if err != nil {
 		httpserver.WriteError(w, err)
 		return

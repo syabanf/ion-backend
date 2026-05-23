@@ -11,6 +11,7 @@ import (
 	"github.com/ion-core/backend/internal/enterprise/port"
 	"github.com/ion-core/backend/pkg/audit"
 	derrors "github.com/ion-core/backend/pkg/errors"
+	"github.com/ion-core/backend/pkg/httpserver"
 )
 
 // Compile-time confirmation Service implements the Phase-3 surface.
@@ -748,13 +749,50 @@ func (s *Service) SubmitBOQ(ctx context.Context, in port.SubmitBOQInput) (*domai
 	return b, instances, nil
 }
 
+// withApprovalLock wraps fn in a postgres advisory lock keyed on the
+// approval-instance id. When s.lockPool is nil (legacy wiring), fn
+// runs unwrapped — same semantics as pre-Wave-106. A concurrent caller
+// observes derrors.Conflict("lock.contended", ...).
+//
+// Wave 106 — retrofit of the Wave 104 pkg/httpserver/advisory_lock.go
+// helper. The catalog's TC-EDGE-002 "Parallel Concurrent Approvers"
+// requires the same approval-instance ID can't be acted on by two
+// goroutines at the same time.
+func (s *Service) withApprovalLock(ctx context.Context, approvalID uuid.UUID, fn func(ctx context.Context) error) error {
+	if s.lockPool == nil {
+		return fn(ctx)
+	}
+	return httpserver.WithAdvisoryLock(ctx, s.lockPool, httpserver.LockKeyForApproval(approvalID), fn)
+}
+
 // ApproveStep handles a single approval action. Sequential templates
 // require step N to be approved before step N+1 becomes actionable;
 // parallel templates accept actions in any order.
 //
 // When the last required step approves, the BOQ flips to boq_approved
 // and any prior approved version of the same boq_number is superseded.
+//
+// Wave 106 — wrapped in a postgres advisory lock keyed on the
+// approval-instance id (TC-EDGE-002 parallel concurrent approvers).
+// Lock is nil-safe when the pool isn't wired (legacy deployments).
 func (s *Service) ApproveStep(ctx context.Context, in port.ApprovalActionInput) (*domain.ApprovalInstance, *domain.BOQ, error) {
+	var (
+		retAI  *domain.ApprovalInstance
+		retBOQ *domain.BOQ
+	)
+	err := s.withApprovalLock(ctx, in.InstanceID, func(ctx context.Context) error {
+		ai, b, ierr := s.approveStepInner(ctx, in)
+		retAI = ai
+		retBOQ = b
+		return ierr
+	})
+	return retAI, retBOQ, err
+}
+
+// approveStepInner is the original ApproveStep body — the part that
+// performs the actual state transition. Extracted so the public
+// ApproveStep wrapper can hold the advisory lock around it.
+func (s *Service) approveStepInner(ctx context.Context, in port.ApprovalActionInput) (*domain.ApprovalInstance, *domain.BOQ, error) {
 	if s.approvalInstances == nil {
 		return nil, nil, errBOQNotConfigured()
 	}
@@ -801,6 +839,17 @@ func (s *Service) ApproveStep(ctx context.Context, in port.ApprovalActionInput) 
 		}
 	}
 	if allApproved {
+		// Wave 101 — stamp the tax_profile + snapshot hash BEFORE
+		// MarkApproved so the snapshot is part of the same "approved
+		// state" write. Best-effort + nil-safe: when no resolver is
+		// wired or no subsidiary is yet known for this BOQ (the common
+		// case at approval time, since the customer PO carrying the
+		// commercial_owner_subsidiary_id hasn't been received), we skip
+		// silently. The IC-PO acceptance path re-stamps with the
+		// correct subsidiary; the reconciliation cron flags any BOQ
+		// that flips to approved without a snapshot for operator
+		// review.
+		s.stampBOQTaxSnapshotIfResolvable(ctx, b)
 		if err := b.MarkApproved(); err != nil {
 			return nil, nil, err
 		}
@@ -846,6 +895,10 @@ func (s *Service) ApproveStep(ctx context.Context, in port.ApprovalActionInput) 
 			Reason:       "chain_complete",
 		})
 		// internal_transactions hook lands here too (next todo).
+		// DEPRECATED (Wave 95): this call site is the legacy recognition
+		// trigger. The canonical trigger is `AcceptIntercompanyPO` →
+		// `recordInternalTransactionsOnICPOAccept`. Kept live to avoid
+		// breaking existing reports; reconciliation cron in Wave 95b.
 		if err := s.recordInternalTransactionsOnApproval(ctx, b); err != nil {
 			if s.log != nil {
 				s.log.Warn("internal_transactions write failed",
@@ -871,7 +924,25 @@ func (s *Service) ApproveStep(ctx context.Context, in port.ApprovalActionInput) 
 // reject) we also flip peer pending instances to superseded_reset
 // so the audit trail captures that they were preempted by the
 // rejection rather than just left dangling.
+//
+// Wave 106 — same advisory-lock wrap as ApproveStep so two concurrent
+// callers can't act on the same approval-instance ID simultaneously
+// (TC-EDGE-002 parallel concurrent approvers).
 func (s *Service) RejectStep(ctx context.Context, in port.ApprovalActionInput) (*domain.ApprovalInstance, *domain.BOQ, error) {
+	var (
+		retAI  *domain.ApprovalInstance
+		retBOQ *domain.BOQ
+	)
+	err := s.withApprovalLock(ctx, in.InstanceID, func(ctx context.Context) error {
+		ai, b, ierr := s.rejectStepInner(ctx, in)
+		retAI = ai
+		retBOQ = b
+		return ierr
+	})
+	return retAI, retBOQ, err
+}
+
+func (s *Service) rejectStepInner(ctx context.Context, in port.ApprovalActionInput) (*domain.ApprovalInstance, *domain.BOQ, error) {
 	if s.approvalInstances == nil {
 		return nil, nil, errBOQNotConfigured()
 	}
@@ -1040,6 +1111,49 @@ func (s *Service) supersedePriorVersions(ctx context.Context, current *domain.BO
 	return nil
 }
 
+// cascadeApprovalChainReset is the Wave 106 polish for TC-AP-* —
+// when a BOQ transitions to revision_draft, any approval instance
+// that's still in flight (pending) on the OLD version should flip to
+// superseded_reset so the audit trail shows the chain was preempted
+// by the revision rather than left dangling. Idempotent: terminal
+// statuses (approved/rejected/already-superseded) skip silently.
+func (s *Service) cascadeApprovalChainReset(ctx context.Context, boqID uuid.UUID, reason string) {
+	if s.approvalInstances == nil {
+		return
+	}
+	chain, err := s.approvalInstances.ListByBOQ(ctx, boqID)
+	if err != nil {
+		return
+	}
+	for i := range chain {
+		c := &chain[i]
+		if c.Status != domain.ApprovalInstanceStatusPending {
+			continue
+		}
+		if err := c.SupersedeResetWithReason(reason); err != nil {
+			continue
+		}
+		if err := s.approvalInstances.Update(ctx, c); err != nil {
+			if s.log != nil {
+				s.log.Warn("cascade approval chain reset failed",
+					"approval_instance_id", c.ID.String(),
+					"err", err.Error(),
+				)
+			}
+			continue
+		}
+		audit.SafeWrite(ctx, s.audit, audit.Entry{
+			Module:       "enterprise",
+			RecordType:   "approval_instance",
+			RecordID:     c.ID.String(),
+			FieldChanged: "status",
+			Before:       string(domain.ApprovalInstanceStatusPending),
+			After:        string(domain.ApprovalInstanceStatusSupersededReset),
+			Reason:       reason,
+		})
+	}
+}
+
 // StartRevision spawns a revision_draft from a rejected BOQ. The
 // rejected row stays put (immutable) — the revision_draft is the
 // editable copy. On resubmit it bumps version_no to N+1.
@@ -1109,6 +1223,136 @@ func (s *Service) StartRevision(ctx context.Context, boqID uuid.UUID) (*domain.B
 			)
 		}
 	}
+	// Wave 106 — cascade any still-pending approval instances on the
+	// OLD version to superseded_reset. Pure defense for the cases where
+	// a pending instance leaked past the rejection roll-up.
+	s.cascadeApprovalChainReset(ctx, b.ID, "boq.revision_started")
+	return &clone, nil
+}
+
+// EditBOQAfterQuotation is the Wave 106 TC-BQ-014 "Material Edit New
+// Version" path. When the operator wants to edit a BOQ that already
+// has a quotation issued for it, we DON'T mutate the approved row in
+// place — that would silently invalidate the customer-facing
+// quotation. Instead we auto-supersede:
+//
+//   - clone the current BOQ + its lines into a fresh revision_draft
+//     row at version_no = highest+1
+//   - apply the line edits to the clone (currently a no-op stub;
+//     callers can mutate via the regular UpdateBOQLine path on the
+//     returned BOQ.ID)
+//   - flip the OLD approved BOQ row to superseded
+//   - audit-row both versions so the chain is traceable
+//
+// When there's NO quotation yet for the BOQ, the usecase falls back
+// to the StartRevision path (which only fires on rejected BOQs) —
+// callers can still go through UpdateBOQLine on the current row.
+//
+// Returns the new revision_draft BOQ. The caller drives line edits
+// via the regular per-line mutation endpoints; this method is just
+// the "spawn the new version" hook.
+func (s *Service) EditBOQAfterQuotation(ctx context.Context, boqID uuid.UUID) (*domain.BOQ, error) {
+	if s.boqs == nil {
+		return nil, errBOQNotConfigured()
+	}
+	b, err := s.boqs.FindByID(ctx, boqID)
+	if err != nil {
+		return nil, err
+	}
+	// Material-edit only makes sense on already-approved BOQs (the
+	// post-quotation-issuance window). For draft/revision-draft, the
+	// regular UpdateBOQLine path handles edits in place.
+	if b.Status != domain.BOQStatusApproved {
+		return nil, derrors.Conflict(
+			"boq.material_edit_not_approved",
+			"material edit-via-supersede requires the BOQ to be in boq_approved state",
+		)
+	}
+	// Check whether a quotation exists for this BOQ — if not, the
+	// caller should use StartRevision after a rejection instead.
+	if s.quotations != nil {
+		if _, qerr := s.quotations.FindLatestForBOQ(ctx, b.ID); qerr != nil {
+			if derrors.IsNotFound(qerr) {
+				return nil, derrors.Conflict(
+					"boq.material_edit_no_quotation",
+					"no quotation issued yet — edit in place via the line PATCH endpoints",
+				)
+			}
+			return nil, qerr
+		}
+	}
+	// Clone the BOQ + lines into a new version (mirrors StartRevision's
+	// mechanics but doesn't gate on `rejected` state).
+	highest, err := s.boqs.FindHighestVersion(ctx, b.BOQNumber)
+	if err != nil {
+		return nil, err
+	}
+	nextVersion := highest.VersionNo + 1
+	clone := *b
+	clone.ID = uuid.New()
+	clone.VersionNo = nextVersion
+	clone.Status = domain.BOQStatusRevisionDraft
+	clone.SnapshotHash = ""
+	clone.ApprovalTemplateID = nil
+	clone.SubmittedAt = nil
+	clone.ApprovedAt = nil
+	clone.RejectedAt = nil
+	clone.SupersededAt = nil
+	clone.RejectionReasonCode = domain.RejectionReasonNone
+	clone.RejectionComment = ""
+	clone.Revision = 1
+	// Tax snapshot stays nil on the clone — the next approval re-stamps.
+	clone.TaxProfileID = nil
+	clone.TaxSnapshotHash = nil
+	now := time.Now().UTC()
+	clone.CreatedAt = now
+	clone.UpdatedAt = now
+	if err := s.boqs.Create(ctx, &clone); err != nil {
+		return nil, err
+	}
+	lines, err := s.boqLines.ListByBOQ(ctx, b.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range lines {
+		nl := l
+		nl.ID = uuid.New()
+		nl.BOQVersionID = clone.ID
+		nl.Status = domain.BOQLineStatusHasCost
+		nl.CreatedAt = now
+		nl.UpdatedAt = now
+		if err := s.boqLines.Create(ctx, &nl); err != nil {
+			return nil, err
+		}
+	}
+	// Flip the old approved row to superseded.
+	if err := b.Supersede(); err != nil {
+		return nil, err
+	}
+	if err := s.boqs.Update(ctx, b, nil); err != nil {
+		return nil, err
+	}
+	// Wave 106 — cascade pending approvals (defensive).
+	s.cascadeApprovalChainReset(ctx, b.ID, "boq.material_edit_supersede")
+	// Audit-row both versions so the supersede chain is traceable.
+	audit.SafeWrite(ctx, s.audit, audit.Entry{
+		Module:       "enterprise",
+		RecordType:   "boq",
+		RecordID:     b.ID.String(),
+		FieldChanged: "status",
+		Before:       string(domain.BOQStatusApproved),
+		After:        string(domain.BOQStatusSuperseded),
+		Reason:       "material_edit_new_version",
+	})
+	audit.SafeWrite(ctx, s.audit, audit.Entry{
+		Module:       "enterprise",
+		RecordType:   "boq",
+		RecordID:     clone.ID.String(),
+		FieldChanged: "status",
+		Before:       "",
+		After:        string(domain.BOQStatusRevisionDraft),
+		Reason:       "material_edit_supersede_from:" + b.ID.String(),
+	})
 	return &clone, nil
 }
 

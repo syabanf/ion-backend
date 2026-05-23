@@ -2,6 +2,7 @@ package port
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -50,6 +51,28 @@ type EWOListFilter struct {
 	AssignedTo    *uuid.UUID
 	Limit         int
 	Offset        int
+
+	// Wave 96 — dual + scheduling filters.
+	Side                    string // "x" | "y" | "" (any)
+	ExecutingSubsidiaryID   *uuid.UUID
+	IntercompanyPOID        *uuid.UUID
+	PairedEWOID             *uuid.UUID
+	AssignedTeamLeadUserID  *uuid.UUID
+	AssignedTechnicianUserID *uuid.UUID
+	ScheduledFrom           *time.Time
+	ScheduledTo             *time.Time
+}
+
+// ScheduleUpdate is the per-call payload for EWORepository.UpdateSchedule.
+// All four fields are required at call time; pass uuid.Nil / zero time
+// only if the caller has already validated the absent values are
+// intentional (the domain refuses zero-valued schedules).
+type ScheduleUpdate struct {
+	ScheduledStart time.Time
+	ScheduledEnd   time.Time
+	DurationDays   int
+	TeamLead       uuid.UUID
+	Technician     *uuid.UUID
 }
 
 type CreateEWOInput struct {
@@ -132,4 +155,44 @@ type EWORepository interface {
 	// silently ignored (the derivation tick can still find the most
 	// recent un-derived row).
 	LogCompletion(ctx context.Context, ewoID uuid.UUID) error
+
+	// Wave 96 — dual EWO + scheduling.
+	//
+	// FindBySide returns EWOs filtered by side (X | Y) along with the
+	// usual list filter. Used by the auto-spawn path to locate an
+	// existing EWO-X for a given (opportunity, BOQ) so the pair link
+	// can be established when the EWO-Y is created.
+	FindBySide(ctx context.Context, side domain.EWOSide, f EWOListFilter) ([]domain.EWO, error)
+	// FindByPair returns the paired EWO (Y for an X, X for a Y) given
+	// the input EWO id. Returns NotFound when no pair is set.
+	FindByPair(ctx context.Context, ewoID uuid.UUID) (*domain.EWO, error)
+	// UpdateSchedule writes only the scheduling columns. The Update
+	// method is for status/assignment mutations and explicitly omits
+	// the scheduling columns to keep the two surfaces independently
+	// auditable.
+	UpdateSchedule(ctx context.Context, ewoID uuid.UUID, sched ScheduleUpdate) error
+	// LockSchedule flips schedule_locked → true without touching
+	// status. Wave 96 — used when status transitions to in_progress
+	// outside of the EWO.Start path (the dedicated MarkEWOInProgress
+	// usecase).
+	LockSchedule(ctx context.Context, ewoID uuid.UUID) error
+	// UpdatePair persists the PairedEWOID set by EWO.LinkPair.
+	UpdatePair(ctx context.Context, ewoID, pairedID uuid.UUID) error
+	// FindOverlappingForTeamLead returns any EWO assigned to the same
+	// team lead whose [scheduled_start, scheduled_end] window overlaps
+	// the supplied range. excludeEWOID skips the current row (used by
+	// Reschedule so an EWO doesn't conflict with itself).
+	FindOverlappingForTeamLead(
+		ctx context.Context,
+		teamLeadID uuid.UUID,
+		start, end time.Time,
+		excludeEWOID *uuid.UUID,
+	) ([]domain.EWO, error)
+}
+
+// EWOScheduleHistoryRepository persists the append-only reschedule
+// audit trail. One row per Reschedule call; never updated or deleted.
+type EWOScheduleHistoryRepository interface {
+	Create(ctx context.Context, entry *domain.ScheduleHistoryEntry) error
+	ListByEWO(ctx context.Context, ewoID uuid.UUID) ([]domain.ScheduleHistoryEntry, error)
 }

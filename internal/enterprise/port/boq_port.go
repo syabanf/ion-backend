@@ -180,6 +180,11 @@ type BOQUseCase interface {
 	ReassignStep(ctx context.Context, in ReassignStepInput) (*domain.ApprovalInstance, error)
 	StartRevision(ctx context.Context, boqID uuid.UUID) (*domain.BOQ, error)
 
+	// EditBOQAfterQuotation — Wave 106 TC-BQ-014. Auto-supersede an
+	// approved BOQ post-quotation-issuance by spawning a fresh
+	// revision_draft at version_no+1; the old row flips to superseded.
+	EditBOQAfterQuotation(ctx context.Context, boqID uuid.UUID) (*domain.BOQ, error)
+
 	// Approval instance queries
 	ListApprovalInstances(ctx context.Context, f ApprovalInstanceListFilter) ([]domain.ApprovalInstance, error)
 }

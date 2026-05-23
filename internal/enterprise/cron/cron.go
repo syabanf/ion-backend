@@ -23,6 +23,7 @@ import (
 
 	"github.com/ion-core/backend/internal/enterprise/domain"
 	"github.com/ion-core/backend/internal/enterprise/port"
+	"github.com/ion-core/backend/pkg/audit"
 	"github.com/ion-core/backend/pkg/notifyx"
 )
 
@@ -34,6 +35,19 @@ type terminIssuer interface {
 	IssueTerminItem(ctx context.Context, in port.IssueTerminItemInput) (*domain.Invoice, error)
 }
 
+// autoLostSweeper is the Wave 106 single-row auto-Lost surface. Used
+// by the OpportunityAutoLostWatcher cron. Declared locally so the
+// runner can take any implementation (Service in prod, fake in tests).
+type autoLostSweeper interface {
+	RunAutoLostSweep(ctx context.Context) ([]uuid.UUID, error)
+}
+
+// quotationExpirer is the Wave 106 cron surface for flipping past-
+// valid_until quotations to expired.
+type quotationExpirer interface {
+	RunQuotationExpirySweep(ctx context.Context) ([]uuid.UUID, error)
+}
+
 // Runner owns the lifetime of all enterprise cron workers. Start
 // kicks them off; the returned cancel func stops them gracefully.
 type Runner struct {
@@ -41,6 +55,22 @@ type Runner struct {
 	log      *slog.Logger
 	issuer   terminIssuer       // optional; nil = legacy notify-only behavior
 	notifier *notifyx.Dispatcher // optional; nil = no push fan-out
+	// Wave 95b / 101 — internal_transaction reconciler. Optional; when
+	// nil the daily tick still runs but the reconciler is skipped.
+	auditWriter audit.Writer
+	// Wave 103 — technician push dispatcher. Optional; nil-safe (no
+	// pushes fan to technicians; existing workers unaffected).
+	technicianPush *TechnicianPushDispatcher
+	// Wave 106 — opportunity auto-Lost watcher (TC-OP-007/008). When
+	// set the runner spins a 1h ticker calling RunAutoLostSweep. Nil
+	// = legacy behaviour (no auto-Lost; ops must call /maintenance/auto-lost-sweep).
+	autoLost autoLostSweeper
+	// Wave 106 — quotation expiry sweeper (TC-QT-* state machine).
+	// When set the runner spins a 1h ticker calling RunQuotationExpirySweep.
+	quotationExpirer quotationExpirer
+	// Wave 107 — invoice reminder dispatcher. Optional; nil-safe (no
+	// reminders fan to customers; existing workers unaffected).
+	invoiceReminder *InvoiceReminderDispatcher
 }
 
 func New(pool *pgxpool.Pool, log *slog.Logger) *Runner {
@@ -65,12 +95,138 @@ func (r *Runner) WithNotifier(n *notifyx.Dispatcher) *Runner {
 	return r
 }
 
+// WithAuditWriter wires the audit.Writer used by the
+// internal_transaction reconciler (Wave 95b / 101) to record
+// divergence detection events. Nil-safe — when missing the reconciler
+// uses audit.Nop{} so the cron still runs, but the divergence signal
+// only lands in the structured log.
+func (r *Runner) WithAuditWriter(w audit.Writer) *Runner {
+	r.auditWriter = w
+	return r
+}
+
+// WithAutoLostSweeper wires the Wave 106 opportunity auto-Lost watcher
+// (TC-OP-007/008). When set, Start() spins a 1h ticker that calls the
+// underlying sweeper's RunAutoLostSweep. Nil = legacy behaviour (no
+// auto-Lost cron; the existing /maintenance/auto-lost-sweep endpoint
+// must be called manually).
+func (r *Runner) WithAutoLostSweeper(s autoLostSweeper) *Runner {
+	r.autoLost = s
+	return r
+}
+
+// WithQuotationExpirer wires the Wave 106 quotation-expiry sweeper.
+// When set, Start() spins a 1h ticker that flips past-valid_until
+// issued quotations to expired (TC-QT-* state machine). Nil = legacy
+// "issued forever" behaviour.
+func (r *Runner) WithQuotationExpirer(q quotationExpirer) *Runner {
+	r.quotationExpirer = q
+	return r
+}
+
 // Start spawns one goroutine per worker. The context controls their
 // lifetime — cancel it (e.g. on SIGTERM) and they exit between ticks.
 func (r *Runner) Start(ctx context.Context) {
 	go r.runMilestoneInvoicer(ctx)
 	go r.runVendorMetricsDeriver(ctx)
 	go r.runPlatformJanitor(ctx)
+	// Wave 95b / 101 — daily reconciliation of the internal_transactions
+	// ledger between the legacy BOQ-approval write path and the
+	// canonical IC-PO-accept path. Idempotent; the reconciler owns
+	// its own ticker so it slots in here without disturbing the
+	// existing worker layout.
+	NewInternalTransactionReconciler(r.pool, r.auditWriter, r.log).Start(ctx)
+	// Wave 103 — technician mobile push dispatcher. Owns its own
+	// ticker; nil-safe (no-op when the builder wasn't called).
+	if r.technicianPush != nil {
+		r.technicianPush.Start(ctx)
+	}
+	// Wave 106 — opportunity auto-Lost watcher + quotation expirer.
+	// Both nil-safe; each runs on its own 1h ticker and is best-effort
+	// (failures log + retry next tick).
+	if r.autoLost != nil {
+		go r.runAutoLostWatcher(ctx)
+	}
+	if r.quotationExpirer != nil {
+		go r.runQuotationExpirer(ctx)
+	}
+	// Wave 107 — invoice reminder dispatcher. Daily ticker; owns its
+	// own goroutine via Start().
+	if r.invoiceReminder != nil {
+		r.invoiceReminder.Start(ctx)
+	}
+}
+
+// ============================================================
+// Wave 106 — Opportunity auto-Lost watcher
+// ============================================================
+
+func (r *Runner) runAutoLostWatcher(ctx context.Context) {
+	// First tick fires ~2 minutes after boot so we don't race
+	// migrations / startup. After that, hourly.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(2 * time.Minute):
+	}
+	r.tickAutoLostWatcher(ctx)
+	t := time.NewTicker(1 * time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.tickAutoLostWatcher(ctx)
+		}
+	}
+}
+
+func (r *Runner) tickAutoLostWatcher(ctx context.Context) {
+	ids, err := r.autoLost.RunAutoLostSweep(ctx)
+	if err != nil {
+		r.log.Warn("auto_lost_watcher: sweep failed", "err", err)
+		return
+	}
+	if len(ids) > 0 {
+		r.log.Info("auto_lost_watcher: flipped", "count", len(ids))
+	}
+}
+
+// ============================================================
+// Wave 106 — Quotation expiry sweeper
+// ============================================================
+
+func (r *Runner) runQuotationExpirer(ctx context.Context) {
+	// First tick at ~3 minutes (offset from auto-lost so they don't
+	// share a DB hot moment).
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(3 * time.Minute):
+	}
+	r.tickQuotationExpirer(ctx)
+	t := time.NewTicker(1 * time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.tickQuotationExpirer(ctx)
+		}
+	}
+}
+
+func (r *Runner) tickQuotationExpirer(ctx context.Context) {
+	ids, err := r.quotationExpirer.RunQuotationExpirySweep(ctx)
+	if err != nil {
+		r.log.Warn("quotation_expirer: sweep failed", "err", err)
+		return
+	}
+	if len(ids) > 0 {
+		r.log.Info("quotation_expirer: flipped", "count", len(ids))
+	}
 }
 
 // ============================================================

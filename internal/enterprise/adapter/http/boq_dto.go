@@ -140,6 +140,10 @@ type boqDTO struct {
 	SnapshotHash        string  `json:"snapshot_hash"`
 	ApprovalTemplateID  *string `json:"approval_template_id,omitempty"`
 	SourceRFQID         *string `json:"source_rfq_id,omitempty"`
+	// Wave 106 — commercial owner subsidiary FK (TC-BQ-013). Nullable;
+	// omitted from the response when unset so legacy callers see the
+	// same shape.
+	CommercialOwnerSubsidiaryID *string `json:"commercial_owner_subsidiary_id,omitempty"`
 	SubmittedAt         *string `json:"submitted_at,omitempty"`
 	ApprovedAt          *string `json:"approved_at,omitempty"`
 	RejectedAt          *string `json:"rejected_at,omitempty"`
@@ -155,32 +159,33 @@ type boqDTO struct {
 
 func toBOQDTO(b domain.BOQ) boqDTO {
 	return boqDTO{
-		ID:                  b.ID.String(),
-		BOQNumber:           b.BOQNumber,
-		OpportunityID:       b.OpportunityID.String(),
-		PricebookID:         b.PricebookID.String(),
-		VersionNo:           b.VersionNo,
-		Status:              string(b.Status),
-		SellTotal:           b.SellTotal,
-		SubtotalAmount:      b.SubtotalAmount,
-		TaxPct:              b.TaxPct,
-		TaxAmount:           b.TaxAmount,
-		CostTotal:           b.CostTotal,
-		MarginPct:           b.MarginPct,
-		SnapshotHash:        b.SnapshotHash,
-		ApprovalTemplateID:  uuidPtrString(b.ApprovalTemplateID),
-		SourceRFQID:         uuidPtrString(b.SourceRFQID),
-		SubmittedAt:         rfc3339Ptr(b.SubmittedAt),
-		ApprovedAt:          rfc3339Ptr(b.ApprovedAt),
-		RejectedAt:          rfc3339Ptr(b.RejectedAt),
-		SupersededAt:        rfc3339Ptr(b.SupersededAt),
-		RejectionReasonCode: string(b.RejectionReasonCode),
-		RejectionComment:    b.RejectionComment,
-		Notes:               b.Notes,
-		Revision:            b.Revision,
-		CreatedBy:           uuidPtrString(b.CreatedBy),
-		CreatedAt:           rfc3339(b.CreatedAt),
-		UpdatedAt:           rfc3339(b.UpdatedAt),
+		ID:                          b.ID.String(),
+		BOQNumber:                   b.BOQNumber,
+		OpportunityID:               b.OpportunityID.String(),
+		PricebookID:                 b.PricebookID.String(),
+		VersionNo:                   b.VersionNo,
+		Status:                      string(b.Status),
+		SellTotal:                   b.SellTotal,
+		SubtotalAmount:              b.SubtotalAmount,
+		TaxPct:                      b.TaxPct,
+		TaxAmount:                   b.TaxAmount,
+		CostTotal:                   b.CostTotal,
+		MarginPct:                   b.MarginPct,
+		SnapshotHash:                b.SnapshotHash,
+		ApprovalTemplateID:          uuidPtrString(b.ApprovalTemplateID),
+		SourceRFQID:                 uuidPtrString(b.SourceRFQID),
+		CommercialOwnerSubsidiaryID: uuidPtrString(b.CommercialOwnerSubsidiaryID),
+		SubmittedAt:                 rfc3339Ptr(b.SubmittedAt),
+		ApprovedAt:                  rfc3339Ptr(b.ApprovedAt),
+		RejectedAt:                  rfc3339Ptr(b.RejectedAt),
+		SupersededAt:                rfc3339Ptr(b.SupersededAt),
+		RejectionReasonCode:         string(b.RejectionReasonCode),
+		RejectionComment:            b.RejectionComment,
+		Notes:                       b.Notes,
+		Revision:                    b.Revision,
+		CreatedBy:                   uuidPtrString(b.CreatedBy),
+		CreatedAt:                   rfc3339(b.CreatedAt),
+		UpdatedAt:                   rfc3339(b.UpdatedAt),
 	}
 }
 
@@ -206,12 +211,19 @@ type boqLineDTO struct {
 	Status                    string   `json:"status"`
 	Notes                     string   `json:"notes"`
 	SortOrder                 int      `json:"sort_order"`
-	CreatedAt                 string   `json:"created_at"`
-	UpdatedAt                 string   `json:"updated_at"`
+	// Wave 106 — TC-BQ-013 ic_po_required derived flag. True when the
+	// line's assigned_provider_company_id differs from the BOQ header's
+	// commercial_owner_subsidiary_id. Computed on read by the DTO mapper.
+	ICPORequired bool `json:"ic_po_required"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
 }
 
-func toBOQLineDTO(l domain.BOQLine) boqLineDTO {
-	return boqLineDTO{
+// toBOQLineDTO maps a domain BOQLine to its API DTO. When `parent` is
+// supplied the ic_po_required flag is derived; when nil (legacy call
+// sites or shapes that don't carry the header) the flag stays false.
+func toBOQLineDTO(l domain.BOQLine, parent *domain.BOQ) boqLineDTO {
+	out := boqLineDTO{
 		ID:                        l.ID.String(),
 		BOQVersionID:              l.BOQVersionID.String(),
 		PricebookLineID:           l.PricebookLineID.String(),
@@ -234,6 +246,10 @@ func toBOQLineDTO(l domain.BOQLine) boqLineDTO {
 		CreatedAt:                 rfc3339(l.CreatedAt),
 		UpdatedAt:                 rfc3339(l.UpdatedAt),
 	}
+	if parent != nil {
+		out.ICPORequired = parent.LineICPORequired(&l)
+	}
+	return out
 }
 
 type createBOQRequest struct {

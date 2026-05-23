@@ -39,8 +39,14 @@ type PricebookLine struct {
 	OwnerRole                 string
 	SortOrder                 int
 	Active                    bool
-	CreatedAt                 time.Time
-	UpdatedAt                 time.Time
+	// Wave 106 — provider-priority badge per pricebook line (TC-PB-010).
+	// Higher values render before lower; ties broken by SKU asc. Default
+	// 0 means "unranked" — the pricebook line list endpoint respects this
+	// when ?sort=priority is set on the query string. Persisted via
+	// migration 0071 ALTER TABLE enterprise.pricebook_lines.
+	PriorityScore int
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // NewPricebookLine constructs a line with all invariants checked.
@@ -167,6 +173,52 @@ func (l *PricebookLine) ValidateMarginFloor(sellPrice, vendorCost float64) error
 		)
 	}
 	return nil
+}
+
+// MarginFloorViolation describes a margin-floor breach with both the
+// computed margin AND the configured floor so the FE can render a
+// helpful "Cost+Margin would be Rp X; floor is Rp Y" toast (TC-PB-006
+// auto-calc-below-floor surface, Wave 106).
+type MarginFloorViolation struct {
+	ComputedMarginPct float64 `json:"computed_margin_pct"`
+	MinMarginPct      float64 `json:"min_margin_pct"`
+	SellPrice         float64 `json:"sell_price"`
+	VendorCost        float64 `json:"vendor_cost"`
+}
+
+// AutoCalcSellPriceWithFloor is the Wave 106 surface for the pricebook
+// auto-calc endpoint. Returns the implied sell price + margin (same as
+// AutoCalcSellPrice) but ALSO surfaces a MarginFloorViolation when the
+// default-margin-derived margin would fall below MinMarginPct. The
+// usecase wraps this into derrors.Validation("pricebook_line.margin_below_floor", ...)
+// with the violation marshalled into the error details field.
+//
+// Math:
+//   sell  = cost / (1 - default_margin/100)
+//   actual_margin = default_margin (by construction of the formula)
+//   floor_violated = actual_margin < min_margin_pct
+//
+// Because actual_margin == default_margin by construction, the only
+// way this returns a violation is if default_margin < min_margin_pct —
+// which the NewPricebookLine constructor + DB CHECK forbid. We still
+// run the check so callers passing a custom margin (different from
+// DefaultMarginPct) get the right signal.
+func (l *PricebookLine) AutoCalcSellPriceWithFloor(vendorCost float64) (sellPrice, marginPct float64, violation *MarginFloorViolation, err error) {
+	sellPrice, marginPct, err = l.AutoCalcSellPrice(vendorCost)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	const eps = 1e-9
+	if marginPct+eps < l.MinMarginPct {
+		v := &MarginFloorViolation{
+			ComputedMarginPct: marginPct,
+			MinMarginPct:      l.MinMarginPct,
+			SellPrice:         sellPrice,
+			VendorCost:        vendorCost,
+		}
+		return sellPrice, marginPct, v, nil
+	}
+	return sellPrice, marginPct, nil, nil
 }
 
 // ValidateDiscountCeiling reports whether a proposed discount % is

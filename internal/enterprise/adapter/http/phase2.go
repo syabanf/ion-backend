@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -491,10 +493,30 @@ func (h *Phase2Handler) createPlanRevision(w http.ResponseWriter, r *http.Reques
 // this vendor quote?" widget reads this to spot outliers.
 // =============================================================================
 
+// vendorBenchmarks returns per-SKU vendor cost statistics PLUS — when
+// the optional Wave 107 `capability` / `min_rating` / `min_jobs`
+// filters are supplied — a per-provider ranking pulled from
+// vendor.providers (joined against vendor.provider_capabilities for
+// the capability filter). Permission: enterprise.boq.read.
+//
+// Two modes:
+//   - Legacy (no filters or `sku=`): per-SKU stats from boq_lines.
+//   - Wave 107 (capability+/min_rating+/min_jobs+): provider ranking
+//     ordered by rating × completion.
+//
+// Both surfaces co-exist so existing clients of the per-SKU view keep
+// working unchanged. Vendor schema may not exist in legacy deployments;
+// the provider query catches the missing-table error and degrades to
+// an empty `providers` list.
 func (h *Phase2Handler) vendorBenchmarks(w http.ResponseWriter, r *http.Request) {
-	sku := r.URL.Query().Get("sku")
+	q := r.URL.Query()
+	sku := q.Get("sku")
+	capability := q.Get("capability")
+	minRating := q.Get("min_rating")
+	minJobs := q.Get("min_jobs")
 
-	q := `
+	// --- Legacy per-SKU stats ---
+	sqlText := `
 		SELECT sku,
 		       COUNT(*) FILTER (WHERE vendor_unit_cost IS NOT NULL) AS quotes,
 		       MIN(vendor_unit_cost),
@@ -507,17 +529,17 @@ func (h *Phase2Handler) vendorBenchmarks(w http.ResponseWriter, r *http.Request)
 	args := []any{}
 	if sku != "" {
 		args = append(args, sku)
-		q += " AND sku = $1"
+		sqlText += " AND sku = $1"
 	}
-	q += " GROUP BY sku ORDER BY sku"
+	sqlText += " GROUP BY sku ORDER BY sku"
 
-	rows, err := h.pool.Query(r.Context(), q, args...)
+	rows, err := h.pool.Query(r.Context(), sqlText, args...)
 	if err != nil {
 		writeEntErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	defer rows.Close()
-	type row struct {
+	type benchRow struct {
 		SKU    string   `json:"sku"`
 		Quotes int      `json:"quotes"`
 		Min    *float64 `json:"min,omitempty"`
@@ -525,12 +547,84 @@ func (h *Phase2Handler) vendorBenchmarks(w http.ResponseWriter, r *http.Request)
 		Max    *float64 `json:"max,omitempty"`
 		Median *float64 `json:"median,omitempty"`
 	}
-	out := []row{}
+	out := []benchRow{}
 	for rows.Next() {
-		var x row
+		var x benchRow
 		if err := rows.Scan(&x.SKU, &x.Quotes, &x.Min, &x.Avg, &x.Max, &x.Median); err == nil {
 			out = append(out, x)
 		}
 	}
-	writeEntJSON(w, http.StatusOK, map[string]any{"items": out})
+
+	// --- Wave 107 provider ranking ---
+	providers := []map[string]any{}
+	if capability != "" || minRating != "" || minJobs != "" {
+		providers = h.queryProviderRanking(r, capability, minRating, minJobs)
+	}
+
+	writeEntJSON(w, http.StatusOK, map[string]any{
+		"items":     out,
+		"providers": providers,
+	})
+}
+
+// queryProviderRanking runs the Wave 107 provider rank query. Returns
+// empty on any error (e.g. vendor schema missing) so the legacy
+// per-SKU surface keeps responding even in deployments without the
+// vendor migration applied.
+func (h *Phase2Handler) queryProviderRanking(r *http.Request, capability, minRating, minJobs string) []map[string]any {
+	var (
+		clauses []string
+		args    []any
+	)
+	clauses = append(clauses, "p.status = 'active'")
+	join := ""
+	if capability != "" {
+		args = append(args, capability)
+		join = " JOIN vendor.provider_capabilities c ON c.provider_id = p.id AND c.capability_key = $1"
+	}
+	if minRating != "" {
+		args = append(args, minRating)
+		clauses = append(clauses, "p.rating_score >= $"+strconv.Itoa(len(args)))
+	}
+	if minJobs != "" {
+		args = append(args, minJobs)
+		clauses = append(clauses, "p.total_completed_jobs >= $"+strconv.Itoa(len(args)))
+	}
+	where := ""
+	if len(clauses) > 0 {
+		where = " WHERE " + strings.Join(clauses, " AND ")
+	}
+	sql := `
+		SELECT p.id, p.name, p.rating_score, p.total_completed_jobs, p.total_revenue
+		FROM vendor.providers p` + join + where + `
+		ORDER BY p.rating_score DESC, p.total_completed_jobs DESC
+		LIMIT 50
+	`
+	rows, err := h.pool.Query(r.Context(), sql, args...)
+	if err != nil {
+		// Vendor schema may not be applied yet; degrade silently.
+		return []map[string]any{}
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var (
+			id      uuid.UUID
+			name    string
+			rating  float64
+			jobs    int
+			revenue float64
+		)
+		if err := rows.Scan(&id, &name, &rating, &jobs, &revenue); err != nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"id":                   id.String(),
+			"name":                 name,
+			"rating_score":         rating,
+			"total_completed_jobs": jobs,
+			"total_revenue":        revenue,
+		})
+	}
+	return out
 }

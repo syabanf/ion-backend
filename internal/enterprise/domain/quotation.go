@@ -62,6 +62,30 @@ type Quotation struct {
 	IssuedBy         *uuid.UUID
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+
+	// Wave 101 — tax snapshot inherited from the source BOQ at issuance.
+	// The usecase copies BOQ.TaxSnapshotHash into this field; downstream
+	// invoice + faktur generation verifies the chain matches.
+	TaxSnapshotHash *string
+}
+
+// InheritTaxSnapshot copies the BOQ's frozen tax snapshot hash onto the
+// quotation. Returns a Conflict if the quotation already carries a
+// hash that differs — once a quotation row exists, its snapshot is
+// immutable.
+func (q *Quotation) InheritTaxSnapshot(hash string) error {
+	if hash == "" {
+		return nil
+	}
+	if q.TaxSnapshotHash != nil && *q.TaxSnapshotHash != "" && *q.TaxSnapshotHash != hash {
+		return errors.Conflict(
+			"tax_snapshot.mismatch",
+			"quotation tax_snapshot_hash already set to a different value — possible BOQ revision drift",
+		)
+	}
+	h := hash
+	q.TaxSnapshotHash = &h
+	return nil
 }
 
 // NewQuotation constructs an issued v1 quotation. Caller (usecase)

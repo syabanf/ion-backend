@@ -137,8 +137,10 @@ type pricebookLineDTO struct {
 	OwnerRole                 string   `json:"owner_role"`
 	SortOrder                 int      `json:"sort_order"`
 	Active                    bool     `json:"active"`
-	CreatedAt                 string   `json:"created_at"`
-	UpdatedAt                 string   `json:"updated_at"`
+	// Wave 106 — provider priority badge for the picker.
+	PriorityScore int    `json:"priority_score"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 func toPricebookLineDTO(l domain.PricebookLine) pricebookLineDTO {
@@ -162,6 +164,7 @@ func toPricebookLineDTO(l domain.PricebookLine) pricebookLineDTO {
 		OwnerRole:                 l.OwnerRole,
 		SortOrder:                 l.SortOrder,
 		Active:                    l.Active,
+		PriorityScore:             l.PriorityScore,
 		CreatedAt:                 rfc3339(l.CreatedAt),
 		UpdatedAt:                 rfc3339(l.UpdatedAt),
 	}
@@ -180,6 +183,8 @@ type createPricebookLineRequest struct {
 	AllowedProviderCompanyIDs []string `json:"allowed_provider_company_ids"`
 	OwnerRole                 string   `json:"owner_role"`
 	SortOrder                 int      `json:"sort_order"`
+	// Wave 106 — initial provider priority badge.
+	PriorityScore int `json:"priority_score"`
 }
 
 type updatePricebookLineRequest struct {
@@ -195,6 +200,8 @@ type updatePricebookLineRequest struct {
 	OwnerRole                 *string   `json:"owner_role,omitempty"`
 	SortOrder                 *int      `json:"sort_order,omitempty"`
 	Active                    *bool     `json:"active,omitempty"`
+	// Wave 106 — provider priority badge mutation.
+	PriorityScore *int `json:"priority_score,omitempty"`
 }
 
 // =====================================================================
@@ -340,4 +347,10 @@ type completePreBOQRequest struct {
 type pinPricebookRequest struct {
 	PricebookID string `json:"pricebook_id"`
 	IfRevision  *int   `json:"if_revision,omitempty"`
+}
+
+// reassignOpportunityRequest is the Wave 106 TC-OP-011 endpoint payload.
+type reassignOpportunityRequest struct {
+	NewOwnerID string `json:"new_owner_user_id"`
+	IfRevision *int   `json:"if_revision,omitempty"`
 }

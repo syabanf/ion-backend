@@ -56,6 +56,81 @@ type Invoice struct {
 	Revision          int
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+
+	// Wave 101 — tax snapshot chain. Copied from the source quotation
+	// (which itself inherits from the BOQ); pinned at invoice creation.
+	// FakturPajakID is the backlink to tax.faktur_pajak_records.id when
+	// faktur was actually issued; nil when waived (Non-PKP path).
+	TaxSnapshotHash *string
+	FakturPajakID   *uuid.UUID
+
+	// Wave 107 — Finance Client AR polish.
+	//
+	// ReminderSentAt is the timestamp of the last reminder email sent
+	// by the reminder cron. We use it to gate "one reminder per due
+	// cycle" (skip if reminder_sent_at >= due_at - 3 days).
+	//
+	// PPh23WithheldAmount / IsPPh23Applicable model the Indonesian
+	// withholding tax: corporate customers often keep 2% of the
+	// service-portion total. When applicable, the settlement view
+	// computes net_received as TotalAmount - PPh23WithheldAmount.
+	// Both columns ship with safe defaults (0 / false) so legacy rows
+	// continue to behave exactly as before migration 0073.
+	ReminderSentAt      *time.Time
+	PPh23WithheldAmount float64
+	IsPPh23Applicable   bool
+}
+
+// MarkReminderSent stamps the reminder timestamp. Called by the
+// reminder cron after a successful notifyx dispatch. No side effect on
+// the invoice status — this is purely an audit + dedupe field.
+func (i *Invoice) MarkReminderSent() {
+	now := time.Now().UTC()
+	i.ReminderSentAt = &now
+	i.UpdatedAt = now
+}
+
+// SetPPh23 toggles the PPh23 withholding flag + amount. Amount may be
+// zero (a flag-only set) so finance can mark "applicable, computed
+// later". Negative amounts are clamped to 0 as a safety net.
+func (i *Invoice) SetPPh23(applicable bool, withheldAmount float64) {
+	if withheldAmount < 0 {
+		withheldAmount = 0
+	}
+	i.IsPPh23Applicable = applicable
+	if applicable {
+		i.PPh23WithheldAmount = withheldAmount
+	} else {
+		i.PPh23WithheldAmount = 0
+	}
+	i.UpdatedAt = time.Now().UTC()
+}
+
+// NetReceived is the cash actually deposited after PPh23 withholding.
+// When PPh23 isn't applicable, equals TotalAmount.
+func (i *Invoice) NetReceived() float64 {
+	if !i.IsPPh23Applicable {
+		return i.TotalAmount
+	}
+	return i.TotalAmount - i.PPh23WithheldAmount
+}
+
+// InheritTaxSnapshot copies the quotation's tax_snapshot_hash onto the
+// invoice. Mirrors Quotation.InheritTaxSnapshot — conflict if the
+// invoice already carries a different value.
+func (i *Invoice) InheritTaxSnapshot(hash string) error {
+	if hash == "" {
+		return nil
+	}
+	if i.TaxSnapshotHash != nil && *i.TaxSnapshotHash != "" && *i.TaxSnapshotHash != hash {
+		return derrors.Conflict(
+			"tax_snapshot.mismatch",
+			"invoice tax_snapshot_hash already set to a different value — possible quotation drift",
+		)
+	}
+	h := hash
+	i.TaxSnapshotHash = &h
+	return nil
 }
 
 // NewInvoice builds the header row from a quotation snapshot. The

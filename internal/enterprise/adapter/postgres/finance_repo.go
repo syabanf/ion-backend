@@ -41,7 +41,9 @@ const invoiceCols = `
 	COALESCE(void_reason, ''), COALESCE(notes, ''),
 	issued_by,
 	invoice_plan_id, invoice_plan_item_id,
-	revision, created_at, updated_at
+	revision, created_at, updated_at,
+	tax_snapshot_hash, faktur_pajak_id,
+	reminder_sent_at, COALESCE(pph23_withheld_amount, 0), COALESCE(is_pph23_applicable, FALSE)
 `
 
 func (r *InvoiceRepository) List(ctx context.Context, f port.InvoiceListFilter) ([]domain.Invoice, int, error) {
@@ -124,9 +126,11 @@ func (r *InvoiceRepository) Create(ctx context.Context, inv *domain.Invoice) err
 			 issued_at, due_at, paid_at, voided_at, void_reason, notes,
 			 issued_by,
 			 invoice_plan_id, invoice_plan_item_id,
-			 revision, created_at, updated_at)
+			 revision, created_at, updated_at,
+			 tax_snapshot_hash, faktur_pajak_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-		        $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+		        $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+		        $25, $26)
 	`,
 		inv.ID, inv.InvoiceNumber, inv.QuotationID, inv.OpportunityID, inv.BOQVersionID,
 		string(inv.Status),
@@ -136,6 +140,7 @@ func (r *InvoiceRepository) Create(ctx context.Context, inv *domain.Invoice) err
 		inv.IssuedBy,
 		inv.InvoicePlanID, inv.InvoicePlanItemID,
 		inv.Revision, inv.CreatedAt, inv.UpdatedAt,
+		inv.TaxSnapshotHash, inv.FakturPajakID,
 	)
 	if err != nil {
 		return mapDBError(err, "invoice", "insert invoice")
@@ -153,22 +158,28 @@ func (r *InvoiceRepository) Update(ctx context.Context, inv *domain.Invoice, ifR
 			UPDATE enterprise.invoices
 			SET status = $2, paid_amount = $3, paid_at = $4,
 			    voided_at = $5, void_reason = $6, notes = $7,
+			    reminder_sent_at = $9,
+			    pph23_withheld_amount = $10, is_pph23_applicable = $11,
 			    revision = revision + 1, updated_at = NOW()
 			WHERE id = $1 AND revision = $8
 		`,
 			inv.ID, string(inv.Status), inv.PaidAmount, inv.PaidAt,
 			inv.VoidedAt, inv.VoidReason, inv.Notes, *ifRevision,
+			inv.ReminderSentAt, inv.PPh23WithheldAmount, inv.IsPPh23Applicable,
 		)
 	} else {
 		tag, err = r.pool.Exec(ctx, `
 			UPDATE enterprise.invoices
 			SET status = $2, paid_amount = $3, paid_at = $4,
 			    voided_at = $5, void_reason = $6, notes = $7,
+			    reminder_sent_at = $8,
+			    pph23_withheld_amount = $9, is_pph23_applicable = $10,
 			    revision = revision + 1, updated_at = NOW()
 			WHERE id = $1
 		`,
 			inv.ID, string(inv.Status), inv.PaidAmount, inv.PaidAt,
 			inv.VoidedAt, inv.VoidReason, inv.Notes,
+			inv.ReminderSentAt, inv.PPh23WithheldAmount, inv.IsPPh23Applicable,
 		)
 	}
 	if err != nil {
@@ -200,6 +211,8 @@ func scanInvoice(row pgx.Row) (domain.Invoice, error) {
 		&inv.IssuedBy,
 		&inv.InvoicePlanID, &inv.InvoicePlanItemID,
 		&inv.Revision, &inv.CreatedAt, &inv.UpdatedAt,
+		&inv.TaxSnapshotHash, &inv.FakturPajakID,
+		&inv.ReminderSentAt, &inv.PPh23WithheldAmount, &inv.IsPPh23Applicable,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Invoice{}, derrors.NotFound("invoice.not_found", "invoice not found")
@@ -293,32 +306,16 @@ const ewoCols = `
 	assigned_to, started_at, completed_at, cancelled_at,
 	COALESCE(cancel_reason, ''), COALESCE(notes, ''),
 	COALESCE(progress_pct, 0), field_work_order_id,
-	revision, created_at, updated_at
+	revision, created_at, updated_at,
+	COALESCE(side, 'x'),
+	executing_subsidiary_id, intercompany_po_id, paired_ewo_id,
+	scheduled_start_date, scheduled_end_date, duration_days,
+	assigned_technician_user_id, assigned_team_lead_user_id,
+	COALESCE(schedule_locked, false)
 `
 
 func (r *EWORepository) List(ctx context.Context, f port.EWOListFilter) ([]domain.EWO, int, error) {
-	var wh []string
-	var args []any
-	if f.Status != "" {
-		args = append(args, f.Status)
-		wh = append(wh, fmt.Sprintf("status = $%d", len(args)))
-	}
-	if f.OpportunityID != nil {
-		args = append(args, *f.OpportunityID)
-		wh = append(wh, fmt.Sprintf("opportunity_id = $%d", len(args)))
-	}
-	if f.QuotationID != nil {
-		args = append(args, *f.QuotationID)
-		wh = append(wh, fmt.Sprintf("quotation_id = $%d", len(args)))
-	}
-	if f.AssignedTo != nil {
-		args = append(args, *f.AssignedTo)
-		wh = append(wh, fmt.Sprintf("assigned_to = $%d", len(args)))
-	}
-	where := ""
-	if len(wh) > 0 {
-		where = " WHERE " + strings.Join(wh, " AND ")
-	}
+	where, args := buildEWOFilter(f)
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 100
@@ -370,18 +367,31 @@ func (r *EWORepository) FindByQuotationID(ctx context.Context, quotationID uuid.
 }
 
 func (r *EWORepository) Create(ctx context.Context, e *domain.EWO) error {
+	side := string(e.Side)
+	if side == "" {
+		side = "x"
+	}
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO enterprise.ewos
 			(id, ewo_number, quotation_id, opportunity_id, boq_version_id, status,
 			 assigned_to, started_at, completed_at, cancelled_at,
 			 cancel_reason, notes, progress_pct, field_work_order_id,
-			 revision, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			 revision, created_at, updated_at,
+			 side, executing_subsidiary_id, intercompany_po_id, paired_ewo_id,
+			 scheduled_start_date, scheduled_end_date, duration_days,
+			 assigned_technician_user_id, assigned_team_lead_user_id,
+			 schedule_locked)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+		        $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 	`,
 		e.ID, e.EWONumber, e.QuotationID, e.OpportunityID, e.BOQVersionID, string(e.Status),
 		e.AssignedTo, e.StartedAt, e.CompletedAt, e.CancelledAt,
 		e.CancelReason, e.Notes, e.ProgressPct, e.FieldWorkOrderID,
 		e.Revision, e.CreatedAt, e.UpdatedAt,
+		side, e.ExecutingSubsidiaryID, e.IntercompanyPOID, e.PairedEWOID,
+		e.ScheduledStartDate, e.ScheduledEndDate, e.DurationDays,
+		e.AssignedTechnicianUserID, e.AssignedTeamLeadUserID,
+		e.ScheduleLocked,
 	)
 	if err != nil {
 		return mapDBError(err, "ewo", "insert ewo")
@@ -446,6 +456,7 @@ func scanEWO(row pgx.Row) (domain.EWO, error) {
 	var (
 		e      domain.EWO
 		status string
+		side   string
 	)
 	err := row.Scan(
 		&e.ID, &e.EWONumber, &e.QuotationID, &e.OpportunityID, &e.BOQVersionID, &status,
@@ -453,6 +464,11 @@ func scanEWO(row pgx.Row) (domain.EWO, error) {
 		&e.CancelReason, &e.Notes,
 		&e.ProgressPct, &e.FieldWorkOrderID,
 		&e.Revision, &e.CreatedAt, &e.UpdatedAt,
+		&side,
+		&e.ExecutingSubsidiaryID, &e.IntercompanyPOID, &e.PairedEWOID,
+		&e.ScheduledStartDate, &e.ScheduledEndDate, &e.DurationDays,
+		&e.AssignedTechnicianUserID, &e.AssignedTeamLeadUserID,
+		&e.ScheduleLocked,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.EWO{}, derrors.NotFound("ewo.not_found", "ewo not found")
@@ -461,7 +477,217 @@ func scanEWO(row pgx.Row) (domain.EWO, error) {
 		return domain.EWO{}, derrors.Wrap(derrors.KindInternal, "db.ewo_scan", "scan ewo", err)
 	}
 	e.Status = domain.EWOStatus(status)
+	e.Side = domain.EWOSide(side)
 	return e, nil
+}
+
+// buildEWOFilter centralises the WHERE-clause builder so List + FindBySide
+// share the same predicates. Returns the rendered " WHERE ... " fragment
+// (empty when no filters) and the positional args.
+func buildEWOFilter(f port.EWOListFilter) (string, []any) {
+	var wh []string
+	var args []any
+	if f.Status != "" {
+		args = append(args, f.Status)
+		wh = append(wh, fmt.Sprintf("status = $%d", len(args)))
+	}
+	if f.OpportunityID != nil {
+		args = append(args, *f.OpportunityID)
+		wh = append(wh, fmt.Sprintf("opportunity_id = $%d", len(args)))
+	}
+	if f.QuotationID != nil {
+		args = append(args, *f.QuotationID)
+		wh = append(wh, fmt.Sprintf("quotation_id = $%d", len(args)))
+	}
+	if f.AssignedTo != nil {
+		args = append(args, *f.AssignedTo)
+		wh = append(wh, fmt.Sprintf("assigned_to = $%d", len(args)))
+	}
+	if f.Side != "" {
+		args = append(args, f.Side)
+		wh = append(wh, fmt.Sprintf("side = $%d", len(args)))
+	}
+	if f.ExecutingSubsidiaryID != nil {
+		args = append(args, *f.ExecutingSubsidiaryID)
+		wh = append(wh, fmt.Sprintf("executing_subsidiary_id = $%d", len(args)))
+	}
+	if f.IntercompanyPOID != nil {
+		args = append(args, *f.IntercompanyPOID)
+		wh = append(wh, fmt.Sprintf("intercompany_po_id = $%d", len(args)))
+	}
+	if f.PairedEWOID != nil {
+		args = append(args, *f.PairedEWOID)
+		wh = append(wh, fmt.Sprintf("paired_ewo_id = $%d", len(args)))
+	}
+	if f.AssignedTeamLeadUserID != nil {
+		args = append(args, *f.AssignedTeamLeadUserID)
+		wh = append(wh, fmt.Sprintf("assigned_team_lead_user_id = $%d", len(args)))
+	}
+	if f.AssignedTechnicianUserID != nil {
+		args = append(args, *f.AssignedTechnicianUserID)
+		wh = append(wh, fmt.Sprintf("assigned_technician_user_id = $%d", len(args)))
+	}
+	if f.ScheduledFrom != nil {
+		args = append(args, *f.ScheduledFrom)
+		wh = append(wh, fmt.Sprintf("scheduled_end_date >= $%d", len(args)))
+	}
+	if f.ScheduledTo != nil {
+		args = append(args, *f.ScheduledTo)
+		wh = append(wh, fmt.Sprintf("scheduled_start_date <= $%d", len(args)))
+	}
+	if len(wh) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(wh, " AND "), args
+}
+
+// FindBySide returns EWOs filtered by side, layered with the standard
+// filter predicates. No pagination — used by auto-spawn path which
+// expects a small result set.
+func (r *EWORepository) FindBySide(
+	ctx context.Context,
+	side domain.EWOSide,
+	f port.EWOListFilter,
+) ([]domain.EWO, error) {
+	f.Side = string(side)
+	where, args := buildEWOFilter(f)
+	sql := `SELECT ` + ewoCols + ` FROM enterprise.ewos` + where + ` ORDER BY created_at DESC LIMIT 100`
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, derrors.Wrap(derrors.KindInternal, "db.ewo_find_by_side", "find by side", err)
+	}
+	defer rows.Close()
+	out := []domain.EWO{}
+	for rows.Next() {
+		e, err := scanEWO(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// FindByPair walks the paired_ewo_id pointer one hop. Returns NotFound
+// if the current EWO has no pair set.
+func (r *EWORepository) FindByPair(ctx context.Context, ewoID uuid.UUID) (*domain.EWO, error) {
+	row := r.pool.QueryRow(ctx,
+		`SELECT `+ewoCols+`
+		 FROM enterprise.ewos
+		 WHERE id = (SELECT paired_ewo_id FROM enterprise.ewos WHERE id = $1)
+		   AND paired_ewo_id IS NOT NULL`, ewoID,
+	)
+	e, err := scanEWO(row)
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+// UpdateSchedule writes only the scheduling columns. We keep Update
+// (status/assignment) and this method separate so audit trails can
+// distinguish "Bob changed status" from "Carol changed schedule".
+func (r *EWORepository) UpdateSchedule(
+	ctx context.Context,
+	ewoID uuid.UUID,
+	sched port.ScheduleUpdate,
+) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE enterprise.ewos
+		SET scheduled_start_date = $2, scheduled_end_date = $3,
+		    duration_days = $4,
+		    assigned_team_lead_user_id = $5,
+		    assigned_technician_user_id = $6,
+		    revision = revision + 1, updated_at = NOW()
+		WHERE id = $1
+	`,
+		ewoID, sched.ScheduledStart, sched.ScheduledEnd,
+		sched.DurationDays, sched.TeamLead, sched.Technician,
+	)
+	if err != nil {
+		return mapDBError(err, "ewo", "update schedule")
+	}
+	if tag.RowsAffected() == 0 {
+		return derrors.NotFound("ewo.not_found", "ewo not found")
+	}
+	return nil
+}
+
+// LockSchedule flips schedule_locked → true without touching status or
+// the schedule columns. Idempotent.
+func (r *EWORepository) LockSchedule(ctx context.Context, ewoID uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE enterprise.ewos
+		SET schedule_locked = TRUE,
+		    revision = revision + 1, updated_at = NOW()
+		WHERE id = $1
+	`, ewoID)
+	if err != nil {
+		return mapDBError(err, "ewo", "lock schedule")
+	}
+	if tag.RowsAffected() == 0 {
+		return derrors.NotFound("ewo.not_found", "ewo not found")
+	}
+	return nil
+}
+
+// UpdatePair stamps paired_ewo_id on a single row. The auto-spawn path
+// calls this twice (once for X → Y, once for Y → X) because LinkPair
+// is symmetric but persistence is not.
+func (r *EWORepository) UpdatePair(ctx context.Context, ewoID, pairedID uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE enterprise.ewos
+		SET paired_ewo_id = $2,
+		    revision = revision + 1, updated_at = NOW()
+		WHERE id = $1
+	`, ewoID, pairedID)
+	if err != nil {
+		return mapDBError(err, "ewo", "update pair")
+	}
+	if tag.RowsAffected() == 0 {
+		return derrors.NotFound("ewo.not_found", "ewo not found")
+	}
+	return nil
+}
+
+// FindOverlappingForTeamLead surfaces EWOs whose schedule window
+// intersects [start, end] for the same team lead. Two windows overlap
+// when start_a < end_b AND start_b < end_a. excludeEWOID is honored
+// when set so Reschedule doesn't conflict with itself.
+func (r *EWORepository) FindOverlappingForTeamLead(
+	ctx context.Context,
+	teamLeadID uuid.UUID,
+	start, end time.Time,
+	excludeEWOID *uuid.UUID,
+) ([]domain.EWO, error) {
+	q := `SELECT ` + ewoCols + `
+		FROM enterprise.ewos
+		WHERE assigned_team_lead_user_id = $1
+		  AND scheduled_start_date IS NOT NULL
+		  AND scheduled_end_date   IS NOT NULL
+		  AND scheduled_start_date < $3
+		  AND scheduled_end_date   > $2
+		  AND status IN ('pending', 'in_progress')`
+	args := []any{teamLeadID, start, end}
+	if excludeEWOID != nil {
+		q += ` AND id <> $4`
+		args = append(args, *excludeEWOID)
+	}
+	q += ` ORDER BY scheduled_start_date`
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, derrors.Wrap(derrors.KindInternal, "db.ewo_overlap", "find overlapping", err)
+	}
+	defer rows.Close()
+	out := []domain.EWO{}
+	for rows.Next() {
+		e, err := scanEWO(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, nil
 }
 
 // silence unused: time import is used in domain only when scanning
