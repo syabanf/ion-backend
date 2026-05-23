@@ -332,6 +332,32 @@ type OnboardingSchemaRepository interface {
 // identity directly, so an interface here keeps the boundary clean.
 // =====================================================================
 
+// =====================================================================
+// Wave 83 — RADIUS cross-context gateway (TC-RAD-013/014/015)
+//
+// When CRM flows mutate a customer's product (addon purchase, plan
+// change apply, addon removal), the RADIUS profile must be refreshed
+// so the new bandwidth / VLAN takes effect. We don't want CRM to
+// import network/domain or know about RFC 5176; the gateway is the
+// narrow contract.
+//
+// The Wave 81b LocalRadiusClient already audits every transition, so
+// even the stub implementation produces a usable trail; the real
+// FreeRADIUS adapter (Wave 80) will additionally push a CoA packet.
+// =====================================================================
+
+type RadiusGateway interface {
+	// RefreshForCustomer triggers a RADIUS profile refresh on the
+	// customer's active account. reason is a short tag (e.g.
+	// "addon_buy", "plan_change_applied") recorded in the audit log.
+	//
+	// Best-effort semantics: returning error is allowed but callers
+	// typically log and proceed — the customer-visible mutation
+	// already landed and the next periodic sync will reconcile.
+	// nil error + no account is treated as "nothing to refresh".
+	RefreshForCustomer(ctx context.Context, customerID uuid.UUID, reason string) error
+}
+
 type SalesUserGateway interface {
 	// SalesTypeFor returns the sales_type ('broadband'|'enterprise'|'both')
 	// of the given user. Returns NotFound when the user is not a sales rep.

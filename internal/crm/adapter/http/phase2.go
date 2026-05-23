@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ion-core/backend/internal/crm/port"
 	"github.com/ion-core/backend/pkg/auth"
 	"github.com/ion-core/backend/pkg/httpserver"
 )
@@ -35,10 +36,22 @@ import (
 type Phase2Handler struct {
 	pool     *pgxpool.Pool
 	verifier *auth.Verifier
+	// Wave 83 (TC-RAD-014/015) — RADIUS profile refresh on sellAddon
+	// (admin-driven) and decidePlanChange("applied"). Nil-safe; absent
+	// in test rigs that don't wire a network client.
+	radius port.RadiusGateway
 }
 
 func NewPhase2Handler(pool *pgxpool.Pool, verifier *auth.Verifier) *Phase2Handler {
 	return &Phase2Handler{pool: pool, verifier: verifier}
+}
+
+// WithRadiusGateway injects the Wave 83 RADIUS hook. When set,
+// sellAddon (admin) + decidePlanChange("applied") call into the
+// gateway to re-push the profile after the row mutation lands.
+func (h *Phase2Handler) WithRadiusGateway(g port.RadiusGateway) *Phase2Handler {
+	h.radius = g
+	return h
 }
 
 func (h *Phase2Handler) Mount(r chi.Router) {
@@ -473,6 +486,12 @@ func (h *Phase2Handler) sellAddon(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Wave 83 (TC-RAD-014) — refresh RADIUS profile after admin
+	// sells a no-install addon. Install-required addons activate
+	// through BAST verify which has its own provisioning hook.
+	if h.radius != nil && !requiresInstall {
+		_ = h.radius.RefreshForCustomer(ctx, customerID, "addon_sell")
+	}
 
 	resp := map[string]any{
 		"id":               id.String(),
@@ -875,6 +894,20 @@ func (h *Phase2Handler) decidePlanChange(w http.ResponseWriter, r *http.Request)
 	if tag.RowsAffected() == 0 {
 		writeErr(w, http.StatusConflict, errMsg{"already decided or not found"})
 		return
+	}
+	// Wave 83 (TC-RAD-015) — the "applied" decision is the moment a
+	// plan upgrade/downgrade actually takes effect; push the new
+	// profile to RADIUS now. We re-read the request row to learn
+	// the customer_id; the request status was already updated above
+	// so a small extra round-trip here is cheap. Best-effort.
+	if in.Decision == "applied" && h.radius != nil {
+		var customerID uuid.UUID
+		if err := h.pool.QueryRow(r.Context(),
+			`SELECT customer_id FROM crm.plan_change_requests WHERE id = $1`,
+			id,
+		).Scan(&customerID); err == nil {
+			_ = h.radius.RefreshForCustomer(r.Context(), customerID, "plan_change_applied")
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": in.Decision})
 }

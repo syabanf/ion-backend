@@ -35,6 +35,7 @@ import (
 	"github.com/jung-kurt/gofpdf"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/ion-core/backend/internal/crm/port"
 	"github.com/ion-core/backend/pkg/auth"
 	"github.com/ion-core/backend/pkg/httpserver"
 	"github.com/ion-core/backend/pkg/notifyx"
@@ -49,6 +50,10 @@ type PortalHandler struct {
 	// guard with `if h.notifier != nil` so the handler still boots
 	// in test rigs that don't wire one.
 	notifier *notifyx.Dispatcher
+	// Wave 83 (TC-RAD-013/014) — RADIUS profile refresh on addon
+	// buy. Nil-safe; without it the handler keeps shipping addon
+	// rows but the network adapter is never touched.
+	radius port.RadiusGateway
 }
 
 func NewPortalHandler(pool *pgxpool.Pool, verifier *auth.Verifier, issuer *auth.Issuer) *PortalHandler {
@@ -60,6 +65,14 @@ func NewPortalHandler(pool *pgxpool.Pool, verifier *auth.Verifier, issuer *auth.
 // optional dependency injected after construction.
 func (h *PortalHandler) WithNotifier(n *notifyx.Dispatcher) *PortalHandler {
 	h.notifier = n
+	return h
+}
+
+// WithRadiusGateway injects the Wave 83 RADIUS profile-refresh hook.
+// When set, buyAddon calls into it after the addon row lands so the
+// network profile picks up the new bandwidth. Nil-safe.
+func (h *PortalHandler) WithRadiusGateway(g port.RadiusGateway) *PortalHandler {
+	h.radius = g
 	return h
 }
 
@@ -1320,6 +1333,16 @@ func (h *PortalHandler) buyAddon(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(ctx); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
+	}
+	// Wave 83 (TC-RAD-013) — refresh the RADIUS profile so the new
+	// bandwidth takes effect immediately. We only call this for
+	// addons that don't require install (the ones that flip live on
+	// purchase); install-required addons activate at BAST verify
+	// where the provisioning path runs anyway. Nil-safe + best-
+	// effort: a failure here doesn't undo the customer_addons write,
+	// the next periodic sync will reconcile.
+	if h.radius != nil && !requiresInstall {
+		_ = h.radius.RefreshForCustomer(ctx, claims.UserID, "addon_buy")
 	}
 	resp := map[string]any{
 		"id":               id.String(),

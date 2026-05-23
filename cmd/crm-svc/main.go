@@ -176,11 +176,19 @@ func main() {
 	server.SetHealth("crm-svc", pool.Ping)
 	handler.Mount(server.Router)
 
+	// Wave 83 (TC-RAD-013/014/015) — RADIUS profile-refresh hook for
+	// the Phase 2 + Portal handlers. Wraps the same in-process
+	// radiusClient that already audits transitions; once FreeRADIUS
+	// lands the gateway will push real CoA packets.
+	radiusGW := crmnet.NewRadiusGateway(radiusClient)
+
 	// Phase 2 — post-activation surface (add-ons, plan changes,
 	// relocations). Lives in its own handler because the schema is
 	// new and the architecture pattern is intentionally simpler
 	// (direct pgxpool) until volumes justify hexagonal layering.
-	crmhttp.NewPhase2Handler(pool, verifier).Mount(server.Router)
+	crmhttp.NewPhase2Handler(pool, verifier).
+		WithRadiusGateway(radiusGW).
+		Mount(server.Router)
 
 	// Push-notification dispatcher. Default provider is the
 	// log-only stub; flip to FCM/APNS via WithProvider once the
@@ -194,6 +202,7 @@ func main() {
 	portalIssuer := auth.NewIssuer(cfg.JWTSecret, cfg.JWTIssuer, cfg.JWTAccessTTL)
 	crmhttp.NewPortalHandler(pool, verifier, portalIssuer).
 		WithNotifier(notifier).
+		WithRadiusGateway(radiusGW).
 		Mount(server.Router)
 
 	if err := server.Run(ctx); err != nil {
