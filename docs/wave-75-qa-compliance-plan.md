@@ -1,6 +1,13 @@
-# Wave 75–81 — QA Compliance Tier C Execution Plan
+# Wave 75–82 — QA Compliance Tier C Execution Plan
 
-**Status as of 2026-05-23:** Waves 75–79 landed in this program. Wave 80 (real FreeRADIUS adapter) and Wave 81 (notifyx wiring + audit emission) remain as substantial multi-session work — interfaces and migration scaffolding are in place, but the protocol-bridge implementation requires its own dedicated session.
+**Status as of 2026-05-23 (current):** Waves 75–81 landed. Wave 80b (lock-snapshot wiring) + Wave 81 (audit emission + notifyx) + Wave 81b (TC-CRM-011 territory auto-assign + TC-RAD-021 audit) + Wave 82 Tier 2a (per-period late-fee dedup + addon merge on recurring) are committed and pushed (commits 3c1dc1c, 8abe2d8, e717692).
+
+**Still outstanding:**
+- Wave 80 — real FreeRADIUS protocol adapter (1.5–2 sessions; needs layeh.com/radius + AES-GCM password migration + mock RADIUS server for tests).
+- TC-RAD-013/014/015 — wire RADIUS.Restore() into buyAddon + decidePlanChange (cross-context plumbing from crm HTTP → network radius client; ~1 session each).
+- TC-SCH-014 — bulk migration audit emission (depends on Wave 79b's bulk endpoint, which isn't built).
+- TC-CRM-005 — enterprise sales_type enforcement helper (broadband side already accepts 'both'; effectively passes for the broadband pipeline).
+- TC-WO-011 — WO checklist via product.service_schema_id (cross-context Field→Platform; needs JSON schema design for checklist items).
 
 ## Done in this program (Waves 75–79)
 
