@@ -30,6 +30,13 @@ func errWODispatchNotConfigured() error {
 }
 
 // CreateDispatch — drafts the BOM. Returns the dispatch in 'planned' state.
+//
+// Wave 89b — when in.Items is empty AND in.ProductID is set AND a BOM
+// template repo is wired, materialize the lines from the product's
+// active template. The template id is stamped onto the dispatch
+// regardless of whether the caller passed explicit lines (so even a
+// hand-edited dispatch carries the audit link back to the seeding
+// template).
 func (s *Service) CreateDispatch(ctx context.Context, in port.CreateWODispatchInput) (*domain.WODispatch, error) {
 	if s.woDispatch == nil {
 		return nil, errWODispatchNotConfigured()
@@ -37,16 +44,46 @@ func (s *Service) CreateDispatch(ctx context.Context, in port.CreateWODispatchIn
 	if _, err := s.warehouses.FindByID(ctx, in.WarehouseID); err != nil {
 		return nil, err
 	}
+
+	// Wave 89b — resolve the active BOM template + optionally use it
+	// to seed lines.
+	var (
+		sourceTemplateID *uuid.UUID
+		seededItems      []port.CreateWODispatchItemInput
+	)
+	if in.ProductID != nil && s.bomTemplates != nil {
+		if detail, err := s.bomTemplates.FindActiveForProduct(ctx, *in.ProductID); err == nil && detail != nil {
+			id := detail.Template.ID
+			sourceTemplateID = &id
+			if len(in.Items) == 0 {
+				for _, it := range detail.Items {
+					seededItems = append(seededItems, port.CreateWODispatchItemInput{
+						ItemID: it.StockItemID,
+						Qty:    it.DefaultQuantity,
+						Notes:  it.Notes,
+					})
+				}
+			}
+		}
+		// FindActiveForProduct returning NotFound is non-fatal — the
+		// product simply has no template yet; caller falls through to
+		// explicit Items (or to a Validation error from domain.NewWODispatch).
+	}
+	itemSrc := in.Items
+	if len(itemSrc) == 0 && len(seededItems) > 0 {
+		itemSrc = seededItems
+	}
+
 	// Verify each item exists in the catalog — cheap fan-out, items list
 	// is typically <10. Catches typo'd UUIDs at the boundary instead of
 	// at scan time.
-	for _, it := range in.Items {
+	for _, it := range itemSrc {
 		if _, err := s.items.FindByID(ctx, it.ItemID); err != nil {
 			return nil, err
 		}
 	}
-	bomItems := make([]domain.WODispatchItem, 0, len(in.Items))
-	for _, it := range in.Items {
+	bomItems := make([]domain.WODispatchItem, 0, len(itemSrc))
+	for _, it := range itemSrc {
 		bomItems = append(bomItems, domain.WODispatchItem{
 			ItemID: it.ItemID,
 			Qty:    it.Qty,
@@ -56,6 +93,9 @@ func (s *Service) CreateDispatch(ctx context.Context, in port.CreateWODispatchIn
 	d, err := domain.NewWODispatch(in.WOID, in.WarehouseID, in.DispatchedBy, bomItems, in.Notes)
 	if err != nil {
 		return nil, err
+	}
+	if sourceTemplateID != nil {
+		d.SourceBOMTemplateID = sourceTemplateID
 	}
 	if err := s.woDispatch.Create(ctx, d); err != nil {
 		return nil, err

@@ -95,6 +95,9 @@ type woDispatchDTO struct {
 	CreatedAt    string              `json:"created_at"`
 	UpdatedAt    string              `json:"updated_at"`
 	Items        []woDispatchItemDTO `json:"items"`
+	// Wave 89b — when set, identifies the BOM template that seeded
+	// this dispatch (even if the operator hand-edited lines).
+	SourceBOMTemplateID *string `json:"source_bom_template_id,omitempty"`
 }
 
 func toWODispatchItemDTO(it domain.WODispatchItem) woDispatchItemDTO {
@@ -153,6 +156,10 @@ func toWODispatchDTO(d domain.WODispatch) woDispatchDTO {
 		s := httpserver.FormatRFC3339(*d.CancelledAt)
 		out.CancelledAt = &s
 	}
+	if d.SourceBOMTemplateID != nil {
+		s := d.SourceBOMTemplateID.String()
+		out.SourceBOMTemplateID = &s
+	}
 	for _, it := range d.Items {
 		out.Items = append(out.Items, toWODispatchItemDTO(it))
 	}
@@ -163,7 +170,10 @@ type createWODispatchRequest struct {
 	WOID        string `json:"wo_id"`
 	WarehouseID string `json:"warehouse_id"`
 	Notes       string `json:"notes,omitempty"`
-	Items       []struct {
+	// Wave 89b — optional product_id; when set with empty items the
+	// service materializes the BOM from the product's active template.
+	ProductID string `json:"product_id,omitempty"`
+	Items     []struct {
 		ItemID string  `json:"item_id"`
 		Qty    float64 `json:"qty"`
 		Notes  string  `json:"notes,omitempty"`
@@ -259,6 +269,18 @@ func (h *Handler) createDispatch(w http.ResponseWriter, r *http.Request) {
 		WarehouseID:  whID,
 		DispatchedBy: c.UserID,
 		Notes:        req.Notes,
+	}
+	// Wave 89b — optional product_id triggers BOM pre-fill when items
+	// is empty. Hand-edited items override the template; the template
+	// id is still stamped on the dispatch in either case.
+	if s := req.ProductID; s != "" {
+		pid, err := uuid.Parse(s)
+		if err != nil {
+			httpserver.WriteError(w, errors.Validation("wo_dispatch.product_invalid",
+				"product_id is not a valid uuid"))
+			return
+		}
+		in.ProductID = &pid
 	}
 	for _, it := range req.Items {
 		iid, err := uuid.Parse(it.ItemID)

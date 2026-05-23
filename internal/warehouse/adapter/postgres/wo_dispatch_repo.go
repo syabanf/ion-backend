@@ -23,11 +23,14 @@ func NewWODispatchRepository(pool *pgxpool.Pool) *WODispatchRepository {
 
 var _ port.WODispatchRepository = (*WODispatchRepository)(nil)
 
+// Wave 89b — source_bom_template_id stamped when CreateDispatch
+// materializes lines from a product BOM template (or when the
+// caller passed an explicit ProductID alongside hand-edited lines).
 const woDispatchHeaderSelect = `
 SELECT id, wo_id, warehouse_id, dispatched_by, status,
        planned_at, staged_at, picked_up_at, returned_at, cancelled_at,
        COALESCE(cancel_reason,''), COALESCE(notes,''), revision,
-       created_at, updated_at
+       created_at, updated_at, source_bom_template_id
 FROM warehouse.wo_dispatch_records
 `
 
@@ -47,10 +50,12 @@ func (r *WODispatchRepository) Create(ctx context.Context, d *domain.WODispatch)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO warehouse.wo_dispatch_records
 			(id, wo_id, warehouse_id, dispatched_by, status,
-			 planned_at, notes, revision, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+			 planned_at, notes, revision, created_at, updated_at,
+			 source_bom_template_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10)
 	`, d.ID, d.WOID, d.WarehouseID, d.DispatchedBy, string(d.Status),
-		d.PlannedAt, d.Notes, d.Revision, d.CreatedAt); err != nil {
+		d.PlannedAt, d.Notes, d.Revision, d.CreatedAt,
+		d.SourceBOMTemplateID); err != nil {
 		return mapDBError(err, "wo_dispatch.create", "create dispatch")
 	}
 	for _, it := range d.Items {
@@ -243,7 +248,7 @@ func scanWODispatchHeader(row pgx.Row) (*domain.WODispatch, error) {
 		&d.ID, &d.WOID, &d.WarehouseID, &d.DispatchedBy, &status,
 		&d.PlannedAt, &d.StagedAt, &d.PickedUpAt, &d.ReturnedAt, &d.CancelledAt,
 		&d.CancelReason, &d.Notes, &d.Revision,
-		&d.CreatedAt, &d.UpdatedAt,
+		&d.CreatedAt, &d.UpdatedAt, &d.SourceBOMTemplateID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, derrors.NotFound("wo_dispatch.not_found", "dispatch not found")

@@ -85,6 +85,12 @@ type WODispatch struct {
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 	Items         []WODispatchItem
+
+	// Wave 89b — when the BOM was materialized from a product BOM
+	// template, the template id is stamped here so an auditor can
+	// trace "which template seeded this dispatch". Nil for ad-hoc
+	// dispatches built by hand.
+	SourceBOMTemplateID *uuid.UUID
 }
 
 // WODispatchItem is one BOM line.

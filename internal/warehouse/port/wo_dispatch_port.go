@@ -24,6 +24,16 @@ type CreateWODispatchInput struct {
 	DispatchedBy uuid.UUID
 	Notes        string
 	Items        []CreateWODispatchItemInput
+
+	// Wave 89b — when the caller passes a ProductID AND leaves Items
+	// empty, the service looks up the product's active BOM template
+	// and materializes the dispatch lines from it. When Items is
+	// non-empty, ProductID is ignored (explicit lines win — the
+	// dashboard's "use template + edit" flow ends up sending the
+	// edited lines, not the raw template). The resolved template id
+	// is stamped on the dispatch row regardless of whether the
+	// caller hand-edited the lines.
+	ProductID *uuid.UUID
 }
 
 // WODispatchListFilter scopes a list query. All fields optional; an

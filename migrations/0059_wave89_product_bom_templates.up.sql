@@ -47,12 +47,16 @@ CREATE TABLE warehouse.product_bom_template_items (
 
 CREATE INDEX idx_bom_template_item ON warehouse.product_bom_template_items (template_id);
 
--- Optional FK from wo_dispatches back to the template that seeded it.
--- ON DELETE SET NULL keeps historical dispatches readable even if
--- the template is later removed.
-ALTER TABLE warehouse.wo_dispatches
+-- Optional FK from wo_dispatch_records back to the template that
+-- seeded it. ON DELETE SET NULL keeps historical dispatches readable
+-- even if the template is later removed.
+--
+-- (Table name is wo_dispatch_records — `wo_dispatches` was the
+-- planning-doc shorthand; migration 0033 created the canonical
+-- `_records` suffix and we keep it.)
+ALTER TABLE warehouse.wo_dispatch_records
     ADD COLUMN IF NOT EXISTS source_bom_template_id UUID
         REFERENCES warehouse.product_bom_templates(id) ON DELETE SET NULL;
 
 CREATE INDEX IF NOT EXISTS idx_dispatch_bom_template
-    ON warehouse.wo_dispatches (source_bom_template_id) WHERE source_bom_template_id IS NOT NULL;
+    ON warehouse.wo_dispatch_records (source_bom_template_id) WHERE source_bom_template_id IS NOT NULL;
