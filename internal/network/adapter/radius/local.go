@@ -32,6 +32,7 @@ import (
 	"github.com/ion-core/backend/internal/network/port"
 	"github.com/ion-core/backend/pkg/audit"
 	"github.com/ion-core/backend/pkg/auth"
+	"github.com/ion-core/backend/pkg/cryptutil"
 	derrors "github.com/ion-core/backend/pkg/errors"
 )
 
@@ -39,6 +40,12 @@ type LocalRadiusClient struct {
 	pool   *pgxpool.Pool
 	log    *slog.Logger
 	auditW audit.Writer // Wave 81 (TC-RAD-021) — defaults to Nop; mutating lifecycle methods emit through it.
+	// Wave 80 phase 1 — optional sealer. When wired, Provision writes
+	// the AES-GCM-sealed plaintext alongside the bcrypt hash so phase
+	// 2's FreeRadiusClient can later open it for CHAP. Without the
+	// sealer this client keeps writing bcrypt-only as before.
+	sealer        *cryptutil.Sealer
+	sealerKeyVer  int
 }
 
 func NewLocalClient(pool *pgxpool.Pool, log *slog.Logger) *LocalRadiusClient {
@@ -47,6 +54,22 @@ func NewLocalClient(pool *pgxpool.Pool, log *slog.Logger) *LocalRadiusClient {
 		log:    log.With("component", "radius_local"),
 		auditW: audit.Nop{},
 	}
+}
+
+// WithSealer wires the AES-GCM sealer used to encrypt the plaintext
+// password for later FreeRADIUS CHAP. keyVersion is the integer
+// stamped into password_key_version so the keyring can rotate keys
+// without losing the ability to open older rows. Nil sealer is a
+// no-op — clients without a sealer wired keep writing bcrypt-only.
+func (c *LocalRadiusClient) WithSealer(s *cryptutil.Sealer, keyVersion int) *LocalRadiusClient {
+	if s != nil {
+		c.sealer = s
+		if keyVersion <= 0 {
+			keyVersion = 1
+		}
+		c.sealerKeyVer = keyVersion
+	}
+	return c
 }
 
 // WithAudit attaches the audit writer. Wave 81 (TC-RAD-021) — every
@@ -105,15 +128,35 @@ func (c *LocalRadiusClient) Provision(ctx context.Context, in domain.ProvisionIn
 	if err != nil {
 		return nil, derrors.Wrap(derrors.KindInternal, "radius.hash", "hash password", err)
 	}
+	// Wave 80 phase 1 — dual-write the AES-GCM sealed plaintext when
+	// a sealer is wired so phase 2's FreeRADIUS CHAP path can later
+	// open it. Both bcrypt (legacy verification) and sealed (forward
+	// path) land atomically on the same row.
+	var (
+		sealed     []byte
+		keyVersion *int
+	)
+	if c.sealer != nil && in.PasswordPlain != "" {
+		s, serr := c.sealer.Seal(in.PasswordPlain)
+		if serr != nil {
+			return nil, derrors.Wrap(derrors.KindInternal,
+				"radius.seal", "seal radius password", serr)
+		}
+		sealed = s
+		v := c.sealerKeyVer
+		keyVersion = &v
+	}
 	id := uuid.New()
 	_, err = c.pool.Exec(ctx, `
 		INSERT INTO network.radius_accounts
-			(id, customer_id, username, password_hash,
+			(id, customer_id, username, password_hash, password_sealed,
+			 password_key_version,
 			 vlan_id, bandwidth_profile_id, status,
 			 temp_activated_at, temp_expires_at,
 			 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'temporary', $7, $8, $9, $9)
-	`, id, in.CustomerID, in.Username, hash, in.VLANID, in.BandwidthProfileID, now, expires, now)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'temporary', $9, $10, $11, $11)
+	`, id, in.CustomerID, in.Username, hash, sealed, keyVersion,
+		in.VLANID, in.BandwidthProfileID, now, expires, now)
 	if err != nil {
 		return nil, derrors.Wrap(derrors.KindInternal, "radius.insert", "create radius account", err)
 	}

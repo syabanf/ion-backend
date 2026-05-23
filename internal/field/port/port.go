@@ -291,12 +291,64 @@ type AssignmentRepository interface {
 
 type ChecklistRepository interface {
 	FindTemplateFor(ctx context.Context, woType domain.WOType, productType, maintSubtype string) (*domain.ChecklistTemplate, []domain.ChecklistTemplateItem, error)
+	// Wave 84b (TC-WO-011) — prefer per-product templates when one
+	// exists. Falls back to FindTemplateFor when productID is nil OR
+	// no per-product row exists. Implementations check the partial
+	// unique index on (wo_type, product_id) from migration 0053.
+	FindTemplateForProduct(ctx context.Context, woType domain.WOType, productID uuid.UUID, maintSubtype string) (*domain.ChecklistTemplate, []domain.ChecklistTemplateItem, error)
+	// CreateDerivedTemplate (Wave 84b) materializes a per-product
+	// template from a service schema's checklist_items array. Idempotent
+	// on (wo_type, product_id) — the materializer relies on this to
+	// only create the template once per product/schema combination.
+	CreateDerivedTemplate(ctx context.Context, in CreateDerivedTemplateInput) (*domain.ChecklistTemplate, error)
 	// FindItem returns a single template item by id — used by the M5 r3
 	// GPS gate so we can check gps_required without re-loading the
 	// whole template.
 	FindItem(ctx context.Context, id uuid.UUID) (*domain.ChecklistTemplateItem, error)
 	UpsertResponse(ctx context.Context, r *domain.ChecklistResponse) (*domain.ChecklistResponse, error)
 	ListResponses(ctx context.Context, woID uuid.UUID) ([]domain.ChecklistResponse, error)
+}
+
+// CreateDerivedTemplateInput is the materializer payload (Wave 84b).
+//
+// v1 PROVISIONAL SHAPE — Items mirror the structure of
+// field.wo_checklist_template_items (the existing legacy template
+// items table). When the PRD signs off on a different JSON shape
+// for service_schema.content.checklist_items, the resolver gateway
+// (internal/field/adapter/platform) translates between PRD shape
+// and this internal shape — this struct stays stable.
+type CreateDerivedTemplateInput struct {
+	WOType                  domain.WOType
+	ProductID               uuid.UUID
+	DerivedFromSchemaID     uuid.UUID
+	MinPhotosRequired       int
+	GPSStampOnPhotos        bool
+	Items                   []DerivedChecklistItem
+}
+
+type DerivedChecklistItem struct {
+	ItemOrder         int
+	ItemType          string // must match field.wo_checklist_template_items.item_type CHECK
+	Label             string
+	Required          bool
+	PhotoTag          string
+	GPSRequired       bool
+	MinAccuracyMeters *int
+}
+
+// ServiceSchemaResolver (Wave 84b) — narrow projection of the platform
+// resolver field-svc needs to materialize per-product checklists.
+//
+// Returns (nil, nil) when:
+//   - No schema is published for this customer (legacy product flow)
+//   - The schema has no checklist_items array (schema content covers
+//     other config keys but not the checklist surface)
+//
+// Errors only on infrastructure failures. Best-effort semantics: a
+// returned error doesn't block WO creation — caller falls through to
+// the legacy per-product_type template.
+type ServiceSchemaResolver interface {
+	ResolveChecklistForCustomer(ctx context.Context, customerID uuid.UUID) ([]DerivedChecklistItem, *uuid.UUID, error)
 }
 
 // M5 r3 — UploadsGateway is the narrow projection of the upload service

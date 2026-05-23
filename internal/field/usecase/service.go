@@ -57,6 +57,11 @@ type Service struct {
 	// AssignTechnicians fires a push to the lead + observer so the
 	// tech app surfaces the new assignment without polling.
 	notifier *notifyx.Dispatcher
+
+	// Wave 84b (TC-WO-011) — service-schema resolver for per-product
+	// checklist materialization at WO creation. Nil-safe; without it,
+	// FindTemplateFor stays on the legacy per-product_type path.
+	serviceSchema port.ServiceSchemaResolver
 }
 
 // WithActivation attaches the activation gateway so VerifyBAST(approved)
@@ -114,6 +119,17 @@ func (s *Service) WithAudit(w audit.Writer) *Service {
 // app surfaces the new assignment without polling. Nil-safe.
 func (s *Service) WithNotifier(d *notifyx.Dispatcher) *Service {
 	s.notifier = d
+	return s
+}
+
+// WithServiceSchemaResolver wires the Wave 84b materializer hook.
+// When set, CreateWOFromOrder materializes a per-product checklist
+// template from the customer's service schema on first WO for that
+// product (idempotent via the partial unique index on
+// (wo_type, product_id)). Without it, the legacy per-product_type
+// template lookup remains the only path.
+func (s *Service) WithServiceSchemaResolver(r port.ServiceSchemaResolver) *Service {
+	s.serviceSchema = r
 	return s
 }
 
@@ -237,6 +253,38 @@ func (s *Service) CreateWOFromOrder(ctx context.Context, in port.CreateWOFromOrd
 		return nil, err
 	}
 
+	// Wave 84b (TC-WO-011) — materialize a per-product checklist
+	// template from the customer's service schema. Idempotent via
+	// the partial unique index on (wo_type, product_id), so repeat
+	// WOs for the same product reuse the template.
+	//
+	// Best-effort: any failure here (no resolver wired, no schema
+	// published, no checklist_items in the body, DB conflict) falls
+	// through to the legacy per-product_type lookup. WO creation
+	// already succeeded; the checklist surface degrades gracefully.
+	if s.serviceSchema != nil && w.ProductID != nil {
+		items, schemaID, ierr := s.serviceSchema.ResolveChecklistForCustomer(ctx, proj.CustomerID)
+		if ierr == nil && len(items) > 0 {
+			derivedFrom := uuid.Nil
+			if schemaID != nil {
+				derivedFrom = *schemaID
+			} else if w.ServiceSchemaID != nil {
+				// Resolver doesn't surface schema_id yet (see comment in
+				// the adapter); fall back to the WO's pinned slot, which
+				// approximates the source.
+				derivedFrom = *w.ServiceSchemaID
+			}
+			_, _ = s.checklists.CreateDerivedTemplate(ctx, port.CreateDerivedTemplateInput{
+				WOType:              w.WOType,
+				ProductID:           *w.ProductID,
+				DerivedFromSchemaID: derivedFrom,
+				MinPhotosRequired:   3,
+				GPSStampOnPhotos:    true,
+				Items:               items,
+			})
+		}
+	}
+
 	// Wave 65 (G2.1) — Provision RADIUS in TEMPORARY at WO creation
 	// per PRD §13. Best-effort: if activation isn't wired or the call
 	// fails, log + continue; ProvisionAndActivate at BAST-approve time
@@ -296,8 +344,22 @@ func (s *Service) GetWO(ctx context.Context, id uuid.UUID) (*port.WODetail, erro
 	}
 	d.Assignments = assigns
 
-	tpl, items, err := s.checklists.FindTemplateFor(ctx, d.WO.WOType, d.WO.ProductType, d.WO.MaintenanceSubtype)
-	if err == nil { // template absence is acceptable for unusual types
+	// Wave 84b — prefer per-product template (materialized from
+	// service schema at WO creation); fall back to legacy
+	// per-product_type when no per-product row exists.
+	var (
+		tpl   *domain.ChecklistTemplate
+		items []domain.ChecklistTemplateItem
+	)
+	if d.WO.ProductID != nil {
+		tpl, items, _ = s.checklists.FindTemplateForProduct(ctx, d.WO.WOType, *d.WO.ProductID, d.WO.MaintenanceSubtype)
+	}
+	if tpl == nil {
+		var ferr error
+		tpl, items, ferr = s.checklists.FindTemplateFor(ctx, d.WO.WOType, d.WO.ProductType, d.WO.MaintenanceSubtype)
+		_ = ferr // template absence is acceptable for unusual types
+	}
+	if tpl != nil {
 		d.ChecklistTemplate = tpl
 		d.ChecklistItems = items
 	}
@@ -571,8 +633,18 @@ func (s *Service) SubmitBAST(ctx context.Context, in port.SubmitBASTInput) (*dom
 			"a BAST is already submitted for this WO (status: "+string(existing.NOCStatus)+")")
 	}
 
-	// Required-checklist gate.
-	tpl, items, _ := s.checklists.FindTemplateFor(ctx, d.WO.WOType, d.WO.ProductType, d.WO.MaintenanceSubtype)
+	// Required-checklist gate. Wave 84b — try per-product first, fall
+	// back to legacy per-product_type so existing templates keep gating.
+	var (
+		tpl   *domain.ChecklistTemplate
+		items []domain.ChecklistTemplateItem
+	)
+	if d.WO.ProductID != nil {
+		tpl, items, _ = s.checklists.FindTemplateForProduct(ctx, d.WO.WOType, *d.WO.ProductID, d.WO.MaintenanceSubtype)
+	}
+	if tpl == nil {
+		tpl, items, _ = s.checklists.FindTemplateFor(ctx, d.WO.WOType, d.WO.ProductType, d.WO.MaintenanceSubtype)
+	}
 	if tpl != nil {
 		responses, err := s.checklists.ListResponses(ctx, in.WOID)
 		if err != nil {

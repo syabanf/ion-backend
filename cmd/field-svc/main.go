@@ -33,12 +33,16 @@ import (
 	fieldhttp "github.com/ion-core/backend/internal/field/adapter/http"
 	fieldpg "github.com/ion-core/backend/internal/field/adapter/postgres"
 	fieldgwnet "github.com/ion-core/backend/internal/field/adapter/network"
+	fieldplatform "github.com/ion-core/backend/internal/field/adapter/platform"
 	fieldgwuploads "github.com/ion-core/backend/internal/field/adapter/uploads"
 	fieldusecase "github.com/ion-core/backend/internal/field/usecase"
 	opshttp "github.com/ion-core/backend/internal/operations/adapter/http"
 	networkpg "github.com/ion-core/backend/internal/network/adapter/postgres"
 	networkradius "github.com/ion-core/backend/internal/network/adapter/radius"
 	networkusecase "github.com/ion-core/backend/internal/network/usecase"
+	platformcrm "github.com/ion-core/backend/internal/platform/adapter/crm"
+	platformpg "github.com/ion-core/backend/internal/platform/adapter/postgres"
+	platformusecase "github.com/ion-core/backend/internal/platform/usecase"
 	uploadshttp "github.com/ion-core/backend/internal/uploads/adapter/http"
 	uploadspg "github.com/ion-core/backend/internal/uploads/adapter/postgres"
 	uploadsusecase "github.com/ion-core/backend/internal/uploads/usecase"
@@ -199,6 +203,20 @@ func main() {
 	fieldAuditW := auditpg.NewWriter(pool)
 	fieldNotifier := notifyx.New(pool, log)
 
+	// Wave 84b (TC-WO-011) — service-schema resolver for per-product
+	// checklist materialization. Embeds an in-process platform usecase
+	// (schemas + overrides + the customer lock reader from Wave 82
+	// Tier 2c) wrapped by the field-side adapter that translates the
+	// schema content's checklist_items array to checklist template
+	// rows. Nil-safe in the field service — without this, the WO
+	// checklist falls back to the legacy per-product_type templates.
+	platformSchemaRepo := platformpg.NewSchemaRepository(pool)
+	platformOverrideRepo := platformpg.NewOverrideRepository(pool)
+	platformSvc := platformusecase.NewService(platformSchemaRepo, platformOverrideRepo).
+		WithCustomerLockReader(platformcrm.NewLockReader(pool))
+	fieldServiceSchemaResolver := fieldplatform.NewServiceSchemaResolver(
+		platformusecase.NewResolver(platformSvc))
+
 	svc := fieldusecase.NewService(woRepo, assignRepo, checklistRepo, resolutionRepo, bastRepo, teamRepo, crmGW).
 		WithBilling(fieldBillingGW).
 		WithReschedule(rescheduleRepo).
@@ -209,7 +227,8 @@ func main() {
 		WithAddressResolver(branchResolver).
 		WithTeamLeaderLookup(branchResolver).
 		WithAudit(fieldAuditW).
-		WithNotifier(fieldNotifier)
+		WithNotifier(fieldNotifier).
+		WithServiceSchemaResolver(fieldServiceSchemaResolver)
 
 	handler := fieldhttp.NewHandler(svc, verifier)
 	uploadHandler := uploadshttp.NewHandler(uploadSvc, localStore, verifier)
