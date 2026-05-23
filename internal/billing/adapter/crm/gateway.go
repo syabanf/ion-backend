@@ -326,3 +326,38 @@ func (g *Gateway) ReferralForReferee(ctx context.Context, refereeID uuid.UUID) (
 	}
 	return &r, nil
 }
+
+// ActiveAddonsForCustomer (Phase 1B — TC-billing-addon-merge) returns
+// the customer's currently active add-ons so the recurring scheduler
+// can fold them into the monthly invoice. We filter on status='active'
+// — addons in 'pending_install' / 'cancelled' don't bill yet.
+//
+// LEFT JOIN against products lets us populate a human-readable name
+// even when the addon's product row no longer exists (the addon row's
+// monthly_fee snapshot is authoritative regardless).
+func (g *Gateway) ActiveAddonsForCustomer(
+	ctx context.Context, customerID uuid.UUID,
+) ([]port.CustomerAddon, error) {
+	rows, err := g.pool.Query(ctx, `
+		SELECT ca.addon_id, COALESCE(p.name, ''), ca.quantity, ca.monthly_fee
+		FROM crm.customer_addons ca
+		LEFT JOIN crm.products p ON p.id = ca.addon_id
+		WHERE ca.customer_id = $1 AND ca.status = 'active'
+		ORDER BY ca.created_at
+	`, customerID)
+	if err != nil {
+		return nil, derrors.Wrap(derrors.KindInternal,
+			"crm.active_addons_lookup", "load active addons", err)
+	}
+	defer rows.Close()
+	out := []port.CustomerAddon{}
+	for rows.Next() {
+		var a port.CustomerAddon
+		if err := rows.Scan(&a.AddonID, &a.Name, &a.Quantity, &a.MonthlyFee); err != nil {
+			return nil, derrors.Wrap(derrors.KindInternal,
+				"crm.active_addons_scan", "scan addon row", err)
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}

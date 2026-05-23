@@ -225,21 +225,47 @@ func (s *Service) tickRecurring(ctx context.Context, now time.Time, rep *port.Ti
 		// Build the recurring invoice via the existing CreateInvoice path.
 		due := periodStart.AddDate(0, 0, 7) // 7-day net terms
 		oid := o.OrderID
-		inv, err := s.CreateInvoice(ctx, port.CreateInvoiceInput{
-			CustomerID:  o.CustomerID,
-			OrderID:     &oid,
-			InvoiceType: domain.InvoiceTypeRecurring,
-			PPNRate:     11.0,
-			DueDate:     due,
-			IssueImmediately: true,
-			Lines: []port.LineItemInput{
-				{
-					Description: fmt.Sprintf("Monthly service — %s", periodStart.Format("Jan 2006")),
-					ItemType:    "mrc",
-					Quantity:    1,
-					UnitPrice:   o.MonthlyPrice,
-				},
+		// Phase 1B (TC-billing-addon-merge) — fold active addons onto the
+		// same invoice so the customer sees one bill rather than one per
+		// addon. CustomerAddon.MonthlyFee is the already-Q-multiplied
+		// snapshot from addon-buy time; quantity stays at 1 here so the
+		// invoice doesn't double-multiply.
+		lines := []port.LineItemInput{
+			{
+				Description: fmt.Sprintf("Monthly service — %s", periodStart.Format("Jan 2006")),
+				ItemType:    "mrc",
+				Quantity:    1,
+				UnitPrice:   o.MonthlyPrice,
 			},
+		}
+		addons, aerr := s.crm.ActiveAddonsForCustomer(ctx, o.CustomerID)
+		if aerr == nil {
+			for _, a := range addons {
+				desc := a.Name
+				if desc == "" {
+					desc = "Add-on " + a.AddonID.String()[:8]
+				}
+				lines = append(lines, port.LineItemInput{
+					Description: fmt.Sprintf("%s — %s", desc, periodStart.Format("Jan 2006")),
+					ItemType:    "addon",
+					Quantity:    1,
+					UnitPrice:   a.MonthlyFee,
+				})
+			}
+		} else {
+			// Addon lookup is best-effort: log via the error report but
+			// keep billing the base plan so revenue still lands.
+			rep.Errors = append(rep.Errors,
+				fmt.Sprintf("addon lookup %s: %v", o.CustomerID, aerr))
+		}
+		inv, err := s.CreateInvoice(ctx, port.CreateInvoiceInput{
+			CustomerID:       o.CustomerID,
+			OrderID:          &oid,
+			InvoiceType:      domain.InvoiceTypeRecurring,
+			PPNRate:          11.0,
+			DueDate:          due,
+			IssueImmediately: true,
+			Lines:            lines,
 		})
 		if err != nil {
 			rep.Errors = append(rep.Errors, fmt.Sprintf("create recurring inv %s: %v", o.OrderID, err))
@@ -294,8 +320,12 @@ func (s *Service) tickLateFees(ctx context.Context, now time.Time, policy *domai
 		if !v.Invoice.DueDate.Before(cutoff) {
 			continue
 		}
-		// Already has a late fee invoice referencing this one?
-		hasLateFee, err := s.hasLateFeeFor(ctx, v.Invoice.OrderID)
+		// Phase 1B (TC-billing-late-fee-per-period): dedup by the
+		// specific invoice, not the whole order. A customer who falls
+		// behind two cycles should accrue two late fees — one per
+		// missed period. The lookup matches addon invoices whose
+		// penalty line description references this invoice's number.
+		hasLateFee, err := s.hasLateFeeForInvoice(ctx, v.Invoice.OrderID, v.Invoice.InvoiceNumber)
 		if err != nil {
 			rep.Errors = append(rep.Errors, fmt.Sprintf("late-fee check %s: %v", v.Invoice.ID, err))
 			continue
@@ -374,11 +404,17 @@ func (s *Service) resolvedSuspensionPolicy(
 	return &out
 }
 
-// hasLateFeeFor checks whether we've already issued a 'penalty' invoice
-// for this customer/order. The check is conservative: round-2 dedupes
-// per-order so a single late month doesn't generate two penalty
-// invoices. Round-3 will track per-period.
-func (s *Service) hasLateFeeFor(ctx context.Context, orderID *uuid.UUID) (bool, error) {
+// hasLateFeeForInvoice checks whether we've already issued a 'penalty'
+// invoice referencing this specific source invoice. Phase 1B
+// (per-period dedup): an order that falls behind two months should
+// accrue two distinct late fees — one per missed cycle — so the dedup
+// key is the source invoice_number, not the parent order.
+//
+// We match on the penalty line's Description (which contains the
+// source InvoiceNumber via fmt.Sprintf("Late fee — %s", …)). Falling
+// back to the order-level scope on nil OrderID keeps un-orderd
+// invoices (e.g. ad-hoc OTC) behaving the same way they did pre-Phase-1B.
+func (s *Service) hasLateFeeForInvoice(ctx context.Context, orderID *uuid.UUID, sourceInvNumber string) (bool, error) {
 	if orderID == nil {
 		return false, nil
 	}
@@ -390,10 +426,15 @@ func (s *Service) hasLateFeeFor(ctx context.Context, orderID *uuid.UUID) (bool, 
 	if err != nil {
 		return false, err
 	}
+	needle := "Late fee — " + sourceInvNumber
 	for _, v := range views {
-		// Any addon invoice with a 'penalty' line counts.
 		for _, l := range v.Lines {
-			if l.ItemType == "penalty" {
+			if l.ItemType != "penalty" {
+				continue
+			}
+			// Empty needle = source had no number, fall back to the
+			// any-penalty check (pre-Phase-1B behavior).
+			if sourceInvNumber == "" || l.Description == needle {
 				return true, nil
 			}
 		}

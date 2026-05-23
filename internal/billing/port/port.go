@@ -230,6 +230,24 @@ type CRMGateway interface {
 	RecordReferral(ctx context.Context, refereeID uuid.UUID, code string, referrerID *uuid.UUID) (*ReferralRow, error)
 	// ReferralForReferee returns the referral row for a referee, or nil.
 	ReferralForReferee(ctx context.Context, refereeID uuid.UUID) (*ReferralRow, error)
+
+	// Phase 1B (TC-billing-addon-merge) — return active add-ons the
+	// scheduler must include on the customer's next recurring invoice.
+	// The slice may be empty; nil error + empty slice means "no active
+	// add-ons" and the recurring path bills the base plan only.
+	ActiveAddonsForCustomer(ctx context.Context, customerID uuid.UUID) ([]CustomerAddon, error)
+}
+
+// CustomerAddon — minimal projection a billing scheduler needs to
+// merge an add-on's monthly_fee onto the recurring invoice.
+// Description renders in the line item; Quantity is already folded
+// into MonthlyFee at addon-buy time (see portal_auth.go::buyAddon)
+// but kept here for audit / human readability.
+type CustomerAddon struct {
+	AddonID     uuid.UUID
+	Name        string
+	Quantity    int
+	MonthlyFee  float64 // already multiplied by Quantity
 }
 
 // SuspendedCustomer — minimal projection of a suspended customer row.
