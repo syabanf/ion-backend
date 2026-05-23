@@ -21,13 +21,30 @@ import (
 // services can authorize requests by checking claims locally — no callback
 // to identity-svc. The short access-token TTL (default 15 minutes) bounds
 // the privilege-revocation lag.
+//
+// Wave 97 added the company-scope + suspended fields:
+//   - SubsidiaryID + HoldingCompanyID feed the enterprise CompanyScope
+//     predicate so reads can be filtered to the actor's allowed
+//     commercial-owner set without a per-request DB lookup.
+//   - SuspendedAt short-circuits requests for users that identity-svc has
+//     marked inactive between token issuance and expiry. Existing tokens
+//     issued before Wave 97 simply omit these fields — the verifier
+//     treats their zero values as "no scope restriction / not suspended",
+//     which means OLD tokens see the SAME data they always did. New
+//     enterprise endpoints relying on CompanyScope.AppliesTo() will
+//     return empty result sets for tokens whose SubsidiaryID is zero,
+//     which is the safe-by-default behaviour we want for company-owned
+//     resources.
 type Claims struct {
-	UserID      uuid.UUID  `json:"uid"`
-	Email       string     `json:"email"`
-	Roles       []string   `json:"roles"`
-	Permissions []string   `json:"perms"`
-	BranchID    *uuid.UUID `json:"branch_id,omitempty"`
-	BranchLevel string     `json:"branch_level,omitempty"`
+	UserID           uuid.UUID  `json:"uid"`
+	Email            string     `json:"email"`
+	Roles            []string   `json:"roles"`
+	Permissions      []string   `json:"perms"`
+	BranchID         *uuid.UUID `json:"branch_id,omitempty"`
+	BranchLevel      string     `json:"branch_level,omitempty"`
+	SubsidiaryID     *uuid.UUID `json:"subsidiary_id,omitempty"`
+	HoldingCompanyID *uuid.UUID `json:"holding_company_id,omitempty"`
+	SuspendedAt      *time.Time `json:"suspended_at,omitempty"`
 	jwt.RegisteredClaims
 }
 

@@ -66,6 +66,14 @@ type QuotationData struct {
 	// Body
 	Lines     []QuotationLine
 	SellTotal float64
+	// Wave 106 — tax breakdown (TC-QT-010/011). When SubtotalAmount > 0
+	// the footer renders a "Pajak (PPN)" row between line subtotal and
+	// grand total: subtotal + (TaxPct% * subtotal) = SellTotal. Empty /
+	// zero values fall back to the legacy "grand total only" footer so
+	// pre-tax-snapshot quotations keep rendering unchanged.
+	SubtotalAmount float64
+	TaxPct         float64
+	TaxAmount      float64
 	// Free-text terms block (optional)
 	Notes string
 }
@@ -185,12 +193,41 @@ func RenderQuotation(d QuotationData) ([]byte, error) {
 	}
 
 	// =================== Total band ===================
+	//
+	// Wave 106 — when a tax breakdown is present (TC-QT-010/011) we
+	// render Subtotal, Pajak (PPN), and Grand Total as three stacked
+	// rows so the FE matches the e-Faktur format. When the BOQ wasn't
+	// stamped with a tax snapshot (legacy / pre-Wave-101) we fall back
+	// to the single-line grand-total footer the older renderer used,
+	// so existing tests + downstream hash-stable expectations stay
+	// stable.
 	pdf.Ln(2)
-	pdf.SetFont("Helvetica", "B", 11)
-	// Empty spacer so the total stays right-aligned over the subtotal column.
-	pdf.CellFormat(136, 7, "GRAND TOTAL", "", 0, "R", false, 0, "")
-	pdf.CellFormat(28, 7, formatMoney(d.SellTotal), "T", 0, "R", false, 0, "")
-	pdf.CellFormat(26, 7, "", "", 1, "L", false, 0, "")
+	if d.SubtotalAmount > 0 && d.TaxAmount >= 0 {
+		// Three-row footer: Subtotal | Pajak (PPN x%) | GRAND TOTAL.
+		pdf.SetFont("Helvetica", "", 10)
+		pdf.CellFormat(136, 6, "Subtotal", "", 0, "R", false, 0, "")
+		pdf.CellFormat(28, 6, formatMoney(d.SubtotalAmount), "T", 0, "R", false, 0, "")
+		pdf.CellFormat(26, 6, "", "", 1, "L", false, 0, "")
+
+		taxLabel := "Pajak (PPN)"
+		if d.TaxPct > 0 {
+			taxLabel = fmt.Sprintf("Pajak (PPN %.0f%%)", d.TaxPct)
+		}
+		pdf.CellFormat(136, 6, taxLabel, "", 0, "R", false, 0, "")
+		pdf.CellFormat(28, 6, formatMoney(d.TaxAmount), "", 0, "R", false, 0, "")
+		pdf.CellFormat(26, 6, "", "", 1, "L", false, 0, "")
+
+		pdf.SetFont("Helvetica", "B", 11)
+		pdf.CellFormat(136, 7, "GRAND TOTAL", "", 0, "R", false, 0, "")
+		pdf.CellFormat(28, 7, formatMoney(d.SellTotal), "T", 0, "R", false, 0, "")
+		pdf.CellFormat(26, 7, "", "", 1, "L", false, 0, "")
+	} else {
+		pdf.SetFont("Helvetica", "B", 11)
+		// Empty spacer so the total stays right-aligned over the subtotal column.
+		pdf.CellFormat(136, 7, "GRAND TOTAL", "", 0, "R", false, 0, "")
+		pdf.CellFormat(28, 7, formatMoney(d.SellTotal), "T", 0, "R", false, 0, "")
+		pdf.CellFormat(26, 7, "", "", 1, "L", false, 0, "")
+	}
 	pdf.Ln(2)
 
 	// =================== Notes / terms ===================
