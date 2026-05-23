@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	warehouseconfig "github.com/ion-core/backend/internal/warehouse/adapter/config"
 	warehousehttp "github.com/ion-core/backend/internal/warehouse/adapter/http"
@@ -92,6 +93,49 @@ func main() {
 	server.SetHealth("warehouse-svc", pool.Ping)
 	handler.Mount(server.Router)
 	priorityHandler.Mount(server.Router)
+
+	// Wave 88b — alert cascade tick. Runs hourly; each pass is
+	// idempotent (SyncAlertStates is INSERT/UPDATE-conditional on
+	// stock_levels state, CascadeEscalations only bumps rows past
+	// their budget). Default escalation budgets follow PRD §10:
+	//   sub_area → area   after 24h
+	//   area     → regional after 24h
+	//
+	// Like the billing tick, this is in-process for now; Round-4
+	// moves it out via leader election when we go multi-replica.
+	// notifyx push to managers at each level lands in Wave 88c —
+	// needs the branch→manager gateway that doesn't exist yet.
+	const (
+		alertTickInterval = time.Hour
+		subToAreaBudget   = 24 * time.Hour
+		areaToRegionalBudget = 24 * time.Hour
+	)
+	go func() {
+		t := time.NewTicker(alertTickInterval)
+		defer t.Stop()
+		runTick := func() {
+			opened, closed, escalated, err := svc.RunAlertCascadeTick(ctx, subToAreaBudget, areaToRegionalBudget)
+			if err != nil {
+				log.Error("alert cascade tick failed", "err", err)
+				return
+			}
+			// Only log when something happened — silent ticks would
+			// flood the logs in healthy clusters.
+			if opened > 0 || closed > 0 || escalated > 0 {
+				log.Info("alert cascade tick",
+					"opened", opened, "closed", closed, "escalated", escalated)
+			}
+		}
+		runTick() // immediate tick on startup
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				runTick()
+			}
+		}
+	}()
 
 	if err := server.Run(ctx); err != nil {
 		log.Error("http server stopped with error", "err", err)
