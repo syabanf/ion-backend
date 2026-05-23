@@ -36,7 +36,14 @@ import (
 	fieldplatform "github.com/ion-core/backend/internal/field/adapter/platform"
 	fieldgwuploads "github.com/ion-core/backend/internal/field/adapter/uploads"
 	fieldusecase "github.com/ion-core/backend/internal/field/usecase"
+	opscrm "github.com/ion-core/backend/internal/operations/adapter/crm"
+	opsfield "github.com/ion-core/backend/internal/operations/adapter/field"
 	opshttp "github.com/ion-core/backend/internal/operations/adapter/http"
+	opsnetwork "github.com/ion-core/backend/internal/operations/adapter/network"
+	opspg "github.com/ion-core/backend/internal/operations/adapter/postgres"
+	opsport "github.com/ion-core/backend/internal/operations/port"
+	opscron "github.com/ion-core/backend/internal/operations/cron"
+	opsusecase "github.com/ion-core/backend/internal/operations/usecase"
 	networkpg "github.com/ion-core/backend/internal/network/adapter/postgres"
 	networkradius "github.com/ion-core/backend/internal/network/adapter/radius"
 	networkusecase "github.com/ion-core/backend/internal/network/usecase"
@@ -249,6 +256,113 @@ func main() {
 	// Wave 65 — Operations module (Phase 1A closure).
 	// Bulk ops + announcements + calendar + SLA dashboard + War Room hook.
 	opshttp.NewHandler(pool, verifier).Mount(server.Router)
+
+	// Wave 125 — Bulk Ops Executors (Phase 1C broadband).
+	// New executor framework alongside the legacy bulk_operations
+	// preview/approve surface: per-kind CSV import, dry-run, idempotent
+	// runner, 8-state job SM, cross-context SQL-only bridges.
+	bulkJobRepo := opspg.NewBulkJobRepository(pool)
+	bpcRepo := opspg.NewBulkPlanChangeItemRepository(pool)
+	bomRepo := opspg.NewBulkODPMigrationItemRepository(pool)
+	bwoRepo := opspg.NewBulkWOCreationItemRepository(pool)
+	pcBridge := opscrm.NewPlanChangeBridge(pool)
+	wcBridge := opsfield.NewWOCreatorBridge(pool)
+	omBridge := opsnetwork.NewODPMigrationBridge(pool, wcBridge)
+	csvLookup := &opspg.CompositeCSVLookup{
+		CustomerAndPlan: pcBridge,
+		Port:            omBridge,
+		Template:        wcBridge,
+	}
+	bulkExec := opsusecase.NewBulkExecutorService(opsusecase.BulkExecutorDeps{
+		Jobs:        bulkJobRepo,
+		BPCItems:    bpcRepo,
+		BOMItems:    bomRepo,
+		BWOItems:    bwoRepo,
+		PCExecutor:  pcBridge,
+		OMExecutor:  omBridge,
+		WCExecutor:  wcBridge,
+		PCValidator: pcBridge,
+		OMValidator: omBridge,
+		WCValidator: wcBridge,
+		Log:         log,
+	})
+	bulkImporter := opsusecase.NewBulkCSVImporter(
+		bulkJobRepo, bpcRepo, bomRepo, bwoRepo, csvLookup, log,
+	)
+	opshttp.NewExecutorHandler(opshttp.ExecutorHandlerDeps{
+		Verifier: verifier,
+		Exec:     bulkExec,
+		Importer: bulkImporter,
+		Jobs:     bulkJobRepo,
+		BPCItems: bpcRepo,
+		BOMItems: bomRepo,
+		BWOItems: bwoRepo,
+	}).Mount(server.Router)
+	opscron.NewBulkJobRunnerTick(bulkJobRepo, bulkExec, log).Start(ctx)
+
+	// =====================================================================
+	// Wave 126 — Maintenance enhancements + Internal Announcements +
+	// Operational Calendar + Cross-Module SLA Ops View.
+	// =====================================================================
+	maintAffectedRepo := opspg.NewMaintenanceAffectedCustomerRepository(pool)
+	maintEscRepo := opspg.NewMaintenanceEscalationRepository(pool)
+	maintReader := opspg.NewMaintenanceReader(pool)
+	announceRepo := opspg.NewAnnouncementRepository(pool)
+	announceRecipRepo := opspg.NewAnnouncementRecipientRepository(pool)
+	calendarRepo := opspg.NewCalendarEventRepository(pool)
+	xmodSnapRepo := opspg.NewCrossModuleSLASnapshotRepository(pool)
+
+	// Cross-context bridges.
+	segmentResolver := opsnetwork.NewCustomerSegmentBridge(pool)
+	announceDispatcher := newAnnouncementDispatcherBridge(pool, log)
+	audienceResolver := newAudienceResolverBridge(pool, log)
+	maintNotifyDispatcher := newMaintenanceNotifyBridge(pool, log)
+	moduleReaders := []opsport.ModuleSLAReader{
+		&fieldModuleSLAReader{pool: pool},
+		&csModuleSLAReader{pool: pool},
+		&billingModuleSLAReader{pool: pool},
+		&enterpriseModuleSLAReader{pool: pool},
+	}
+
+	maintSvc := opsusecase.NewMaintenanceService(opsusecase.MaintenanceDeps{
+		Reader:      maintReader,
+		Affected:    maintAffectedRepo,
+		Escalations: maintEscRepo,
+		SegmentRes:  segmentResolver,
+		Dispatcher:  maintNotifyDispatcher,
+		Log:         log,
+	})
+	announceSvc := opsusecase.NewAnnouncementService(opsusecase.AnnouncementDeps{
+		Repo:       announceRepo,
+		Recipients: announceRecipRepo,
+		Audience:   audienceResolver,
+		Dispatcher: announceDispatcher,
+		Log:        log,
+	})
+	calendarSvc := opsusecase.NewCalendarService(opsusecase.CalendarDeps{
+		Repo: calendarRepo,
+		Log:  log,
+	})
+	xmodSvc := opsusecase.NewCrossModuleSLAService(opsusecase.CrossModuleSLADeps{
+		Repo:    xmodSnapRepo,
+		Readers: moduleReaders,
+		Log:     log,
+	})
+
+	// Wave 126 HTTP routes.
+	opshttp.NewWave126Handler(verifier).
+		WithMaintenance(maintSvc).
+		WithAnnouncements(announceSvc).
+		WithCalendar(calendarSvc).
+		WithCrossModuleSLA(xmodSvc).
+		Mount(server.Router)
+
+	// Wave 126 cron workers.
+	opscron.NewMaintenanceLeadTimeTick(maintSvc, log).Start(ctx)
+	opscron.NewMaintenanceOverrunDetectTick(maintSvc, log).Start(ctx)
+	opscron.NewAnnouncementDispatcherTick(announceSvc, log).Start(ctx)
+	opscron.NewCalendarAutoSyncTick(calendarSvc, log).Start(ctx)
+	opscron.NewCrossModuleSLAAggregateTick(xmodSvc, log).Start(ctx)
 
 	// M5 r3 — kick off the SLA-breach watcher.
 	go svc.StartSLAWatcher(ctx, 5*time.Minute, log)
