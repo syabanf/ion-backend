@@ -47,6 +47,12 @@ ALTER TABLE identity.audit_logs
 -- ---------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------
+-- The digest() function lives in pgcrypto. Enable it BEFORE defining
+-- compute_audit_hash so the function-body parser (check_function_bodies)
+-- can resolve the symbol at CREATE-time. CI's postgis image bundles
+-- pgcrypto; on a stock postgres this CREATE EXTENSION installs it.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- 2. compute_audit_hash(id, prev_hash, payload) — pure, deterministic
 --    sha256-hex of (prev_hash || '|' || payload::text). Marked IMMUTABLE
 --    so the planner can fold it.
@@ -65,11 +71,6 @@ LANGUAGE sql IMMUTABLE AS $$
         'hex'
     )
 $$;
-
--- The digest() function lives in pgcrypto. Enable it if not already on
--- (CI's postgis image bundles it; running this on a stock postgres
--- needs the extension installed).
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ---------------------------------------------------------------------
 -- 3. BEFORE INSERT — populate prev_hash + row_hash on every new row.
