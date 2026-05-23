@@ -274,6 +274,27 @@ type UseCase interface {
 	UpsertOpnameCount(ctx context.Context, in UpsertOpnameCountInput) (*domain.OpnameCount, error)
 	CommitOpname(ctx context.Context, id, performedBy uuid.UUID) (*OpnameView, error)
 	CancelOpname(ctx context.Context, id, performedBy uuid.UUID) (*OpnameView, error)
+
+	// Purchase orders (Wave 85, Tier 3 starter)
+	CreatePurchaseOrder(ctx context.Context, in CreatePurchaseOrderInput) (*PurchaseOrderDetail, error)
+	GetPurchaseOrder(ctx context.Context, id uuid.UUID) (*PurchaseOrderDetail, error)
+	ListPurchaseOrders(ctx context.Context, f PurchaseOrderListFilter) ([]domain.PurchaseOrder, int, error)
+	SubmitPurchaseOrder(ctx context.Context, id, by uuid.UUID) (*PurchaseOrderDetail, error)
+	CancelPurchaseOrder(ctx context.Context, id, by uuid.UUID, reason string) (*PurchaseOrderDetail, error)
+}
+
+// CreatePurchaseOrderInput — usecase entry point. The PO number is
+// generated server-side; callers don't pass it in. PPN defaults to
+// 11% when zero (Indonesia's current standard rate).
+type CreatePurchaseOrderInput struct {
+	SupplierID           uuid.UUID
+	BranchID             uuid.UUID
+	ReceivingWarehouseID uuid.UUID
+	Lines                []domain.PurchaseOrderLineInput
+	PPNRate              float64
+	ExpectedAt           *time.Time
+	Notes                string
+	CreatedBy            *uuid.UUID
 }
 
 // =====================================================================
@@ -411,4 +432,41 @@ type TransferRepository interface {
 	List(ctx context.Context, status string, limit, offset int) ([]domain.Transfer, int, error)
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.Transfer, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.TransferStatus, ts *time.Time) error
+}
+
+// =====================================================================
+// Wave 85 (Tier 3 starter) — Purchase Orders
+// =====================================================================
+
+// PurchaseOrderListFilter mirrors the patterns established by other
+// list filters in this port: empty / zero values mean "don't filter
+// on this field". Pagination is required (defaults applied at the
+// service layer).
+type PurchaseOrderListFilter struct {
+	Status     string
+	BranchID   *uuid.UUID
+	SupplierID *uuid.UUID
+	Limit      int
+	Offset     int
+}
+
+// PurchaseOrderDetail bundles a PO header with its lines. Returned
+// from FindByID so the dashboard renders the full PO in one query.
+type PurchaseOrderDetail struct {
+	PO    domain.PurchaseOrder
+	Lines []domain.PurchaseOrderLine
+}
+
+type PurchaseOrderRepository interface {
+	// Create persists header + lines in one tx so a half-written PO
+	// can't exist. The header's PONumber is generated in the domain
+	// constructor and surfaced back on success.
+	Create(ctx context.Context, po *domain.PurchaseOrder, lines []domain.PurchaseOrderLine) error
+	FindByID(ctx context.Context, id uuid.UUID) (*PurchaseOrderDetail, error)
+	List(ctx context.Context, f PurchaseOrderListFilter) ([]domain.PurchaseOrder, int, error)
+	// UpdateStatus is the narrow write path for Submit / Cancel /
+	// (later) Approve / Receive transitions. The usecase computes the
+	// new status + actor + timestamp and calls in; the repo only
+	// persists what it's told.
+	UpdateStatus(ctx context.Context, id uuid.UUID, po *domain.PurchaseOrder) error
 }

@@ -58,6 +58,8 @@ func main() {
 	supplierRepo := warehousepg.NewSupplierRepository(pool)
 	// WO dispatch — BOM + QR-scan handoff from warehouse to field tech.
 	woDispatchRepo := warehousepg.NewWODispatchRepository(pool)
+	// Wave 85 (Tier 3 starter) — purchase orders.
+	poRepo := warehousepg.NewPurchaseOrderRepository(pool)
 
 	verifier := auth.NewVerifier(cfg.JWTSecret, cfg.JWTIssuer)
 
@@ -72,7 +74,8 @@ func main() {
 		WithR2(thresholdRepo, alertRepo, opnameRepo).
 		WithSuppliers(supplierRepo).
 		WithValuation(valuation).
-		WithWODispatch(woDispatchRepo)
+		WithWODispatch(woDispatchRepo).
+		WithPurchaseOrders(poRepo)
 
 	handler := warehousehttp.NewHandler(svc, verifier).WithWODispatch(svc)
 	priorityHandler := warehousehttp.NewPriorityHandler(pool, verifier)

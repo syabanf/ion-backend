@@ -139,6 +139,21 @@ func (h *Handler) Mount(r chi.Router) {
 			Post("/opname/sessions/{id}/commit", h.commitOpname)
 		r.With(httpserver.RequirePermission("warehouse.opname.execute")).
 			Post("/opname/sessions/{id}/cancel", h.cancelOpname)
+
+		// --- Wave 85 (Tier 3 starter) — Purchase orders
+		// Read: anyone with stock-read scope. Manage (create + status
+		// transitions): tighter warehouse.po.manage permission so the
+		// expensive PO surface doesn't escape to general dashboard users.
+		r.With(httpserver.RequirePermission("warehouse.po.read")).
+			Get("/purchase-orders", h.listPurchaseOrders)
+		r.With(httpserver.RequirePermission("warehouse.po.read")).
+			Get("/purchase-orders/{id}", h.getPurchaseOrder)
+		r.With(httpserver.RequirePermission("warehouse.po.manage")).
+			Post("/purchase-orders", h.createPurchaseOrder)
+		r.With(httpserver.RequirePermission("warehouse.po.manage")).
+			Post("/purchase-orders/{id}/submit", h.submitPurchaseOrder)
+		r.With(httpserver.RequirePermission("warehouse.po.manage")).
+			Post("/purchase-orders/{id}/cancel", h.cancelPurchaseOrder)
 	})
 
 	// WO dispatch — opt-in surface. Self-skips when WithWODispatch

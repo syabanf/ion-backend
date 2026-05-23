@@ -41,7 +41,10 @@ type Service struct {
 	// work order. Optional (WithWODispatch) — nil-safe via
 	// errWODispatchNotConfigured.
 	woDispatch port.WODispatchRepository
-	log        *slog.Logger
+	// Wave 85 (Tier 3 starter) — purchase orders. Optional; the create
+	// + list + detail surface 503s cleanly when this isn't wired.
+	purchaseOrders port.PurchaseOrderRepository
+	log            *slog.Logger
 }
 
 // WithValuation attaches the platform_config reader so ListAssets +
