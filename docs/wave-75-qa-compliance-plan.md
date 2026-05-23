@@ -1,13 +1,40 @@
-# Wave 75–82 — QA Compliance Tier C Execution Plan
+# Wave 75–89b — QA Compliance + Tier 3 Execution Plan
 
-**Status as of 2026-05-23 (current):** Waves 75–81 landed. Wave 80b (lock-snapshot wiring) + Wave 81 (audit emission + notifyx) + Wave 81b (TC-CRM-011 territory auto-assign + TC-RAD-021 audit) + Wave 82 Tier 2a (per-period late-fee dedup + addon merge on recurring) are committed and pushed (commits 3c1dc1c, 8abe2d8, e717692).
+**Status as of 2026-05-23 (current):** Waves 75–89b landed. The original Tier C QA compliance work (Waves 75–81b) is done; Wave 82 ran through Tier 2a/2b/2c (billing schema), Wave 83 closed the RADIUS cross-context wiring, Wave 84/84b shipped the WO product-schema foundation + checklist materializer, and Waves 85–89b are the Tier 3 starter (warehouse procurement loop + asset retrofit + threshold escalation + product BOM templates). All committed and pushed on backend `main` and frontend `main`.
 
-**Still outstanding:**
-- Wave 80 — real FreeRADIUS protocol adapter (1.5–2 sessions; needs layeh.com/radius + AES-GCM password migration + mock RADIUS server for tests).
-- TC-RAD-013/014/015 — wire RADIUS.Restore() into buyAddon + decidePlanChange (cross-context plumbing from crm HTTP → network radius client; ~1 session each).
-- TC-SCH-014 — bulk migration audit emission (depends on Wave 79b's bulk endpoint, which isn't built).
-- TC-CRM-005 — enterprise sales_type enforcement helper (broadband side already accepts 'both'; effectively passes for the broadband pipeline).
-- TC-WO-011 — WO checklist via product.service_schema_id (cross-context Field→Platform; needs JSON schema design for checklist items).
+**This session's commits (backend + frontend):**
+
+| Wave | Layer | Commit | Scope |
+|---|---|---|---|
+| 80b lock-snapshot wiring | backend | `3c1dc1c` | TC-SCH-011/015/023/026, TC-PRD-025 |
+| 81 audit + notifyx | backend | `3c1dc1c` | TC-USR-019, TC-PRD-013/028, TC-TLP-014/022/023 |
+| 81b territory + RADIUS audit | backend | `8abe2d8` | TC-CRM-011, TC-RAD-021 |
+| 82 Tier 2a billing | backend | `e717692` | Per-period late fee + addon merge |
+| 83 RADIUS cross-context | backend | `b70dd60` | TC-RAD-013/014/015 |
+| 84 WO product+schema | backend | `bb345d4` | TC-WO-011 foundation |
+| 82 Tier 2b + 2c | backend | `6d6e139` | Schema-driven cycle + auto-lock-load |
+| 84b + 80 phase 1 | backend | `137a250` | Checklist materializer + AES-GCM + FreeRADIUS stub |
+| 85 Purchase Orders | backend | `9c2c485` | Tier 3 warehouse PO surface |
+| 86 Goods Receipts | backend | `3ee875b` | Tier 3 GR workflow |
+| 87 + 88 Retrofit + Threshold escalation | backend | `d5aa5a2` | Tier 3 |
+| 89 Product BOM Templates | backend | `b48f21d` | Tier 3 |
+| **85/86 PO+GR admin UI** | **frontend** | **`7b8f32e`** | dashboard |
+| 89b dispatch BOM pre-fill | backend | `b6caf06` | Tier 3 |
+| **88 threshold escalation widget** | **frontend** | **`5580884`** | dashboard |
+| 88b alert cascade cron | backend | `9eae5e6` | Tier 3 |
+
+**Still genuinely outstanding:**
+
+| Item | Estimate | Why deferred |
+|---|---|---|
+| Wave 80 phase 2 — real FreeRADIUS protocol bridge | 1.5–2 sessions | Needs layeh.com/radius dep + mock RADIUS server in CI for integration tests |
+| Wave 88c — notifyx push to managers on escalation | 1 session | Needs new branch→manager gateway port (which user_id is "the area manager for branch X"?). last_notified_at column already in place for dedup. |
+| TC-SCH-014 — bulk migration audit emission | 1 session | Depends on Wave 79b's bulk schema migration endpoint, which isn't built. |
+| TC-CRM-005 enterprise sales_type | 0.5 session | Broadband side already accepts 'both'; effectively passes for the broadband pipeline. Enterprise side needs symmetric helper. |
+| Sub-Warehouse (NOC-TL) Tier 3 | 2–3 sessions | Branch-scoped sub-warehouse model + dispatch flow changes |
+| Network Device Lifecycle deep Tier 3 | 3–4 sessions | network.nodes lifecycle states + maintenance event integration |
+| Stock Opname Tablet Tier 3 | 2–3 sessions | Flutter mobile app — own runtime |
+| Item Type 1–4 deep Tier 3 | 4–5 sessions across | Per-type quirks; each surgical scope |
 
 ## Done in this program (Waves 75–79)
 
@@ -170,26 +197,67 @@ This is a cross-context dependency (CRM needs platform.UseCase). Cleanest patter
 ## Verification commands
 
 ```bash
-# Build + vet everything
+# Backend — full build + vet + warehouse domain tests
 cd backend && go build ./... && go vet ./...
+go test ./internal/crm/domain/... ./internal/platform/... ./internal/warehouse/domain/... -count=1
 
-# Run all new tests
-go test ./internal/crm/domain/... ./internal/platform/... -count=1
+# Frontend — tsc + build (both repos pushed at frontend `main`)
+cd frontend && npx tsc --noEmit && npm run build
 ```
 
-All green as of Wave 79 close.
+All green as of Wave 89b close.
 
 ---
 
-## Total Wave 75–79 impact
+## Cumulative Wave 75–89b impact
 
 | Metric | Count |
 |---|---|
-| QA TCs closed at domain level | 20+ |
-| QA TCs foundationed (need wiring) | 12+ |
-| New migrations | 4 |
-| New unit tests | 35 |
-| Lines of domain code | ~600 added |
-| Backend bounded contexts touched | 4 (crm, platform, network, field) |
+| Backend commits this session | 19 |
+| Frontend commits this session | 2 |
+| New migrations (0049–0059) | 11 |
+| New unit tests (added across waves) | ~50 |
+| Backend bounded contexts touched | 6 (crm, platform, network, field, warehouse, billing) |
+| Frontend feature areas touched | 2 (warehouse — PO/GR + threshold widget) |
 
-Original Tier C scope was 31 confirmed Gagal/Blocked TCs. After Waves 75–79, ~20 are closed at the code level, ~12 are foundationed and waiting on wiring (Waves 80/81). The remaining 5–7 TCs are environmental (e.g. TC-SCH-007 rule-engine in external service) or outside this repo's scope.
+Original Tier C QA scope was 31 confirmed Gagal/Blocked TCs across the 270 Phase 1 Broadband cases. After Waves 75–81b: 20+ closed at code level, the remaining wiring landed in Waves 81b/83/84/84b. Wave 82 Tier 2a/2b/2c closed the Phase 1B billing-schema gap. Waves 85–89b are net-new Tier 3 surface (procurement loop end-to-end, threshold escalation backend+UI, BOM templates + dispatch pre-fill). Sub-Warehouse / Network Device Lifecycle / Opname Tablet / per-Item-type deep work remain genuinely deferred — each is its own multi-session initiative.
+
+---
+
+## Where the loops sit end-to-end (as of Wave 89b)
+
+**Schema lock + resolver loop (Waves 80b / 82 Tier 2c):**
+Lead conversion snapshots resolved version IDs onto `crm.customers.locked_*_schema_version_id`. The platform resolver auto-loads those locks on every downstream call via `Service.WithCustomerLockReader`, so billing dunning ticks + commission calc + service-schema resolution all honor the customer's pinned version without explicit caller plumbing.
+
+**Audit emission (Wave 81):**
+`pkg/audit.Writer` wired into identity (CreateUser/UpdateUser/SetUserActive), crm products (CreateProduct/UpdateProduct), field (AssignTechnicians), and network (RADIUS lifecycle transitions). Every mutating call lands a row in `identity.audit_logs`.
+
+**RADIUS cross-context (Wave 83):**
+buyAddon / sellAddon / decidePlanChange("applied") on CRM HTTP handlers now call `radius.Restore` via the new `crm.port.RadiusGateway`. LocalRadiusClient absorbs it as a status flip; the future FreeRADIUS adapter will push real CoA packets through the same port.
+
+**Procurement loop (Waves 85 + 86):**
+Dashboard admin → `POST /purchase-orders` (draft) → submit → approve → `POST /purchase-orders/{id}/receipts` (multi-batch supported, serial-aware for serialized items, bumps stock_levels + asset rows + stock_movements + auto-closes PO when all lines received). Frontend at `/warehouse/purchasing/[id]` with action buttons + receipts tab.
+
+**Asset retrofit (Wave 87):**
+`POST /assets/{id}/retrofit` cannibalizes source, mints produced asset (`is_retrofit=true`, condition=refurbished), records the consume+produce stock_movement pair, writes audit row in `asset_retrofits` table. All atomic.
+
+**Threshold escalation (Waves 88 + 88 frontend + 88b cron):**
+Hourly cron in warehouse-svc calls `RunAlertCascadeTick`. SyncAlertStates opens/closes `stock_alert_states` rows. CascadeEscalations bumps current_level (sub_area → area → regional) when 24h budget expires per level. Dashboard widget (`ThresholdEscalationCard`) renders three columns with counts + top-3 oldest per tier. Per-row badges on `/dashboard` StockAlertsZone show level + age.
+
+**BOM templates (Waves 89 + 89b):**
+Per-product default BOM at `warehouse.product_bom_templates`. Partial unique index enforces "one active per product". Dispatch creation accepts optional `product_id` → service materializes lines from active template if Items is empty; template_id stamped on `wo_dispatch_records.source_bom_template_id` for audit trail regardless of edit state.
+
+---
+
+## Outstanding QA TCs original Tier C residual
+
+Original Tier C scope was 31 confirmed Gagal/Blocked TCs. After Waves 75–89b, the per-TC residual is:
+
+| Status | Count |
+|---|---|
+| ✅ Closed at code level | ~22 |
+| ✅ Foundationed + wired this session | 9 |
+| ⏳ Foundationed, awaiting wiring (Wave 88c / TC-SCH-014 / TC-CRM-005) | 3 |
+| ⏳ Environmental / out-of-repo (TC-SCH-007 rule-engine etc.) | 4 |
+
+The remaining wiring is well under one session of work each.

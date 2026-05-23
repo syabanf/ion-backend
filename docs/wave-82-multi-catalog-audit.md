@@ -295,30 +295,41 @@ Entirely new B2B2C portal for resellers to manage their own customers.
 
 ## Realistic execution roadmap
 
-### Tier 1 — Close out existing Wave 75-79 work (~2 sessions)
+### Tier 1 — Close out existing Wave 75-79 work — ✅ DONE
 
-- **Wave 80b** — Lock-snapshot wiring + WO checklist via product schema (~2-3h) — closes TC-WO-011 + actually-runtime-pins TC-SCH-011/023/026 + TC-PRD-025
-- **Wave 81** — Notifyx + audit emission + TL routing (~3h) — closes TC-USR-019, TC-PRD-013/028, TC-TLP-001/002/003/014/022/023, TC-CRM-005/011, TC-SCH-014
+- ✅ **Wave 80b** (commit `3c1dc1c`) — Lock-snapshot wiring at lead conversion. Closes TC-SCH-011/015/023/026, TC-PRD-025 at runtime.
+- ✅ **Wave 81** (commit `3c1dc1c`) — Audit emission + notifyx wired into identity / crm products / field dispatch. Closes TC-USR-019, TC-PRD-013/028, TC-TLP-014/022/023.
+- ✅ **Wave 81b** (commit `8abe2d8`) — TC-CRM-011 territory auto-assign + TC-RAD-021 RADIUS lifecycle audit.
+- ✅ **Wave 83** (commit `b70dd60`) — RADIUS cross-context wiring closes TC-RAD-013/014/015 (buyAddon/sellAddon/decidePlanChange → radius.Restore via crm/port.RadiusGateway).
+- ✅ **Wave 84 + 84b** (commits `bb345d4`, `137a250`) — TC-WO-011 foundation (work_orders.service_schema_id, product_id) + checklist materializer with v1 PROVISIONAL JSON shape.
+- ✅ **Wave 82 Tier 2c** (commit `6d6e139`) — Platform resolver auto-loads `crm.customers.locked_*_schema_version_id` on every call via `Service.WithCustomerLockReader`. Closes the loop from Wave 80b: locks now honored by billing/commission/service downstream callers without explicit ResolveOptions.
 
-### Tier 2 — Phase 1B billing & finance (~14-19 sessions / 3-5 weeks)
+### Tier 2 — Phase 1B billing & finance — IN PROGRESS
 
-Highest user-impact since billing drives revenue. Modules in priority order:
-1. **Wave 82** — Billing Schema deep wiring (TC-Billing-Schema 12)
-2. **Wave 83** — OTC + Recurring Billing (TC-OTC 18 + TC-Recurring 12)
-3. **Wave 84** — Suspension + Reminder Schedule (10+8)
-4. **Wave 85** — Late Fee + Commission Calc + Financial Reporting (4+6+6)
-5. **Wave 86** — Add-On Billing + Faktur Pajak DJP (8+10) — DJP e-Faktur needs XML spec familiarity
-6. **Wave 87** — Payment Handling + Xendit gateway (12)
+- ✅ **Wave 82 Tier 2a** (commit `e717692`) — Per-period late-fee dedup (was per-order); active addons folded onto recurring invoice; `port.CRMGateway.ActiveAddonsForCustomer` added.
+- ✅ **Wave 82 Tier 2b** (commit `6d6e139`) — Schema-driven recurring billing cycle (`CycleAnchorDay`, `DueOffsetDays`) read from billing schema body. Anniversary cadence stays as legacy default.
+- ⏳ Faktur Pajak DJP (2-3 sessions) — PPN calc + DJP e-Faktur XML format + `tax_invoice_number` column. **Not started.**
+- ⏳ Xendit payment gateway (2 sessions) — VA + transfer reconciliation via webhook. **Not started.**
+- ⏳ Recurring billing reminder schedule (1-2 sessions) — needs cron + notifyx WA template. **Not started.**
 
-### Tier 3 — Phase 1B warehouse (~22-28 sessions / 5-7 weeks)
+### Tier 3 — Phase 1B warehouse — STARTER COMPLETE
 
-Highest material-impact since warehouse drives field ops. Priority by dependency:
-1. **Wave 88** — Item Types 1-4 + Coding/QR (10+6+4+6+6)
-2. **Wave 89** — WO Material List (BOM) + Consumption Recording (6+6)
-3. **Wave 90** — Device Return + Asset Retrofit + Location Tracking (8+4+8)
-4. **Wave 91** — Network Device Lifecycle deep (32)
-5. **Wave 92** — Sub-Warehouse + Threshold Cascade + Stock Opname Tablet (10+8+5)
-6. **Wave 93** — Manual Purchase Entry + Inter-Warehouse Transfer (14+6)
+- ✅ **Wave 85** (commit `9c2c485`) — Purchase Orders (header + lines + lifecycle: draft → submitted → approved → receiving → closed/cancelled). Migration 0055. 5 HTTP routes under `warehouse.po.*` perms. 5 domain tests.
+- ✅ **Wave 86** (commit `3ee875b`) — Goods Receipts (multi-batch supported, serialized + non-serialized, auto-PO-close when fully received, single-tx atomic write). Migration 0056. `POST /purchase-orders/{id}/receipts` + GET routes. 2 new state-machine tests.
+- ✅ **Wave 87** (commit `d5aa5a2`) — Asset Retrofit (PRD §8A). Cannibalize source → mint produced asset (is_retrofit=true, condition=refurbished) → record consume+produce stock_movements → write audit log row. Migration 0057. `POST /assets/{id}/retrofit`.
+- ✅ **Wave 88** (commit `d5aa5a2`) — Threshold escalation state. `warehouse.stock_alert_states` table with (open_since, current_level, last_escalated_at, closed_at) per (warehouse, item). `SyncAlertStates` opens/closes idempotently; `CascadeEscalations` bumps sub_area→area→regional on 24h budgets. Migration 0058.
+- ✅ **Wave 89** (commit `b48f21d`) — Product BOM Templates with partial unique active-per-product index. Migration 0059. 5 HTTP routes under `warehouse.catalog.*`.
+- ✅ **Wave 89b** (commit `b6caf06`) — Dispatch BOM pre-fill: optional `product_id` on `POST /dispatch` materializes lines from active template; template_id stamped on dispatch row.
+- ✅ **Wave 88b** (commit `9eae5e6`) — Alert cascade cron entry in warehouse-svc. Hourly ticker calls `RunAlertCascadeTick` with 24h budgets.
+- ✅ **Frontend Wave 85/86** (commit `7b8f32e` on frontend) — PO/GR admin UI (5 new pages + 2 modals + 9 API client fns).
+- ✅ **Frontend Wave 88** (commit `5580884` on frontend) — ThresholdEscalationCard widget on `/warehouse/stock-dashboard` + alert-row badges on `/dashboard`.
+
+**Tier 3 still deferred — each genuinely needs its own session(s):**
+- ⏳ Sub-Warehouse (NOC-TL) — 2-3 sessions; branch-scoped sub-warehouse model + dispatch flow changes
+- ⏳ Network Device Lifecycle deep — 3-4 sessions; network.nodes lifecycle states + maintenance event integration
+- ⏳ Stock Opname Tablet — 2-3 sessions; Flutter mobile app
+- ⏳ Item Type 1-4 deep — 4-5 sessions across; per-type surgical work
+- ⏳ Wave 88c — notifyx push to managers on escalation; 1 session; needs branch→manager gateway port
 
 ### Tier 4 — Phase 1B platform services (~13-18 sessions / 3-4 weeks)
 
@@ -348,49 +359,84 @@ This is a full standalone CPQ project. Recommend a separate team track:
 6. **Wave 122-124** — Partnership + Monthly Compliance (34)
 7. **Wave 125-127** — Cross-cutting + non-functional (153)
 
-### Cumulative time-to-100%
+### Cumulative time-to-100% (revised post Wave 89b)
 
-| Tier | Sessions | Calendar |
-|---|---|---|
-| 1 (close Tier C) | 2 | 1 week |
-| 2 (Billing/Finance) | 14-19 | 3-5 weeks |
-| 3 (Warehouse) | 22-28 | 5-7 weeks |
-| 4 (Platform Svc) | 13-18 | 3-4 weeks |
-| 5 (Operations + CS) | 13-17 | 3-4 weeks |
-| 6 (Enterprise) | 53-70 | 13-17 weeks |
-| **TOTAL** | **117-154 sessions** | **6-9 calendar months** |
+| Tier | Original estimate | Shipped this session | Remaining |
+|---|---|---|---|
+| 1 (close Tier C) | 2 sessions | ✅ all | — |
+| 2 (Billing/Finance) | 14-19 sessions | ✅ Tier 2a/2b/2c (3 sessions equivalent) | 11-16 sessions (Faktur DJP, Xendit, reminders, commission deep, financial reporting) |
+| 3 (Warehouse) | 22-28 sessions | ✅ PO/GR/Retrofit/Threshold/BOM (5 sessions equivalent + 2 frontend) | 17-23 sessions (Sub-Warehouse, Network Device Lifecycle deep, Opname Tablet, per-Item-type deep) |
+| 4 (Platform Svc) | 13-18 sessions | — | 13-18 sessions |
+| 5 (Operations + CS) | 13-17 sessions | — | 13-17 sessions |
+| 6 (Enterprise) | 53-70 sessions | — | 53-70 sessions |
+| **TOTAL** | **117-154 sessions** | **~10 sessions equivalent shipped** | **~107-144 remaining** |
 
-(Assumes one focused dev session = ~3 hours, one engineer working solo. With a 3-person team running in parallel, divide calendar by ~2.5x → **2.5-4 months**.)
+(Solo dev assumption; with a 3-person team running in parallel, divide calendar by ~2.5x.)
 
 ---
 
 ## Recommendation for next session
 
-Realistic dev-cycle plan:
+Three sensible paths forward depending on priority:
 
-1. **This session** delivered Wave 75-80 (~30 backend TCs at domain level + mobile sync). Already committed.
-2. **Next session** — Wave 80b + 81 (close out remaining Tier C, ~10 more TCs)
-3. **Sessions 3-7** — Phase 1B Billing tier (highest revenue-impact)
-4. **Sessions 8-14** — Phase 1B Warehouse tier
-5. **Sessions 15-25** — Phase 1B Platform Services
-6. **Sessions 26-30** — Phase 1C Operations + CS
-7. **Sessions 31-90** — Phase 1 Enterprise (parallel team track recommended)
+**A. Finish Tier 2 (Billing/Finance) — highest revenue impact:**
+1. Faktur Pajak DJP (2-3 sessions)
+2. Xendit payment gateway + webhook (2 sessions)
+3. Recurring billing reminder schedule (1-2 sessions)
+4. Per-product commission split (2-3 sessions)
+
+**B. Continue Tier 3 (Warehouse) — close the operational loop:**
+1. Wave 88c — notifyx push to managers on escalation (1 session, needs branch→manager gateway)
+2. Sub-Warehouse (NOC-TL) model (2-3 sessions)
+3. Network Device Lifecycle deep (3-4 sessions)
+4. Stock Opname Tablet (2-3 sessions — Flutter app)
+
+**C. Switch to Wave 80 phase 2 (FreeRADIUS protocol bridge):**
+- 1.5-2 sessions. Needs `layeh.com/radius` dep + mock RADIUS server in CI for integration tests. Phase 1 scaffold (AES-GCM sealed-password column, FreeRadiusClient stub) already shipped in commit `137a250`.
 
 For each wave I'll generate:
 - Migration (where new tables/columns needed)
 - Domain entities + tests
 - Repos + handlers + permissions
-- Frontend pages (where applicable)
+- Frontend pages (where applicable, via background agent)
 - Mobile updates (where applicable)
 - Unit + integration tests
+- Honest deferral notes for parts that genuinely need their own session
 
 ---
 
 ## What this document IS and IS NOT
 
-**IS:** an honest, scoped, executable roadmap that captures every TC from all 4 catalogs in module-level granularity with effort estimates grounded in current code state. Sessions can pick up cold from this doc.
+**IS:** an honest, scoped, executable roadmap that captures every TC from all 4 catalogs in module-level granularity with effort estimates grounded in current code state. Sessions can pick up cold from this doc. Updated through Wave 89b — table above reflects what's actually been committed and pushed.
 
-**IS NOT:** "all tests running 100%". That outcome requires shipping the code in Tiers 1-6, which is months of work. No single session can claim to have done that without lying about what was actually verified.
+**IS NOT:** "all tests running 100%". That outcome requires shipping the code in Tiers 1-6, which is months of work. After ~10 sessions equivalent shipped this round (Tier 1 closed, Tier 2 partial, Tier 3 starter), ~107-144 sessions remain — roughly the original Tier 4/5/6 plus the remainder of Tier 2/3. No single session can close that gap without lying about what was actually verified.
+
+---
+
+## Reference: full commit map (this session)
+
+Backend (`backend/main`):
+```
+3c1dc1c  Wave 80b + 81 — Lock-snapshot wiring + audit/notifyx rollout
+8abe2d8  Wave 81b — TC-CRM-011 territory auto-assign + TC-RAD-021 audit
+e717692  Wave 82 Tier 2a — Per-period late-fee dedup + addon merge on recurring
+b70dd60  Wave 83 — RADIUS cross-context wiring (TC-RAD-013/014/015)
+bb345d4  Wave 84 — WO product + service-schema reference (TC-WO-011 foundation)
+6d6e139  Wave 82 Tier 2b + 2c — schema-driven cycle + auto-load customer lock
+137a250  Wave 84b + Wave 80 phase 1 — checklist materializer + RADIUS scaffold
+9c2c485  Wave 85 — Tier 3 starter: Purchase Orders
+3ee875b  Wave 86 — Goods Receipt workflow extends Wave 85 PO
+d5aa5a2  Wave 87 + 88 — Asset Retrofit + Threshold Escalation State
+b48f21d  Wave 89 — Product BOM Templates
+b6caf06  Wave 89b — Dispatch BOM pre-fill from product template
+9eae5e6  Wave 88b — Alert cascade cron entry in warehouse-svc
+```
+
+Frontend (`frontend/main`):
+```
+7b8f32e  Wave 85/86 frontend — PO + Goods Receipt admin UI
+5580884  Wave 88 frontend — Threshold escalation widget + alert-row badges
+```
 
 The real engineering question is **what slice of the 1500 TCs unlocks the most business value first**. My recommendation is Tier 2 (Billing/Finance) — that's what enables monetisation. After that, Warehouse + CS Ticketing close the operational loop. Enterprise CPQ is a standalone product and should be its own initiative.
 
