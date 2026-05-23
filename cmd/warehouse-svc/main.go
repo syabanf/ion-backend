@@ -62,6 +62,8 @@ func main() {
 	poRepo := warehousepg.NewPurchaseOrderRepository(pool)
 	// Wave 86 — goods receipts (one-shot atomic tx; depends on poRepo).
 	grRepo := warehousepg.NewGoodsReceiptRepository(pool)
+	// Wave 87 — asset retrofit.
+	retrofitRepo := warehousepg.NewAssetRetrofitRepository(pool)
 
 	verifier := auth.NewVerifier(cfg.JWTSecret, cfg.JWTIssuer)
 
@@ -78,7 +80,8 @@ func main() {
 		WithValuation(valuation).
 		WithWODispatch(woDispatchRepo).
 		WithPurchaseOrders(poRepo).
-		WithGoodsReceipts(grRepo)
+		WithGoodsReceipts(grRepo).
+		WithAssetRetrofits(retrofitRepo)
 
 	handler := warehousehttp.NewHandler(svc, verifier).WithWODispatch(svc)
 	priorityHandler := warehousehttp.NewPriorityHandler(pool, verifier)

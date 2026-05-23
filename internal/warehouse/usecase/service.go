@@ -47,7 +47,10 @@ type Service struct {
 	// Wave 86 — goods receipts. Depends on purchaseOrders being wired
 	// since CreateGoodsReceipt mutates parent PO line state.
 	goodsReceipts port.GoodsReceiptRepository
-	log           *slog.Logger
+	// Wave 87 — asset retrofit. Cannibalizes a source asset and
+	// produces a new one in a single audit-logged tx.
+	assetRetrofits port.AssetRetrofitRepository
+	log            *slog.Logger
 }
 
 // WithValuation attaches the platform_config reader so ListAssets +

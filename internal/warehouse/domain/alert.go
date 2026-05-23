@@ -1,6 +1,10 @@
 package domain
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // StockAlert is one below-threshold row surfaced to the alerts API.
 // We compute the alert at read time (no separate alerts table); the
@@ -28,4 +32,23 @@ type StockAlert struct {
 	MinThreshold     float64
 	Shortfall        float64 // min_threshold - quantity (always > 0 for alerts)
 	EscalationPath   []uuid.UUID
+
+	// Wave 88 — populated when a stock_alert_states row exists for
+	// this (warehouse, item) pair. Nil before the first cron tick
+	// after the alert opens; the frontend treats absence as "newly
+	// opened".
+	OpenSince          *time.Time
+	CurrentLevel       AlertLevel
+	LastEscalatedAt    *time.Time
 }
+
+// AlertLevel mirrors warehouse.stock_alert_states.current_level. The
+// cron worker bumps it up the branch chain when the time budget at
+// the current level expires.
+type AlertLevel string
+
+const (
+	AlertLevelSubArea  AlertLevel = "sub_area"
+	AlertLevelArea     AlertLevel = "area"
+	AlertLevelRegional AlertLevel = "regional"
+)

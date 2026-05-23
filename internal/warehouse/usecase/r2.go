@@ -48,6 +48,27 @@ func (s *Service) ListStockAlerts(ctx context.Context, f port.AlertFilter) ([]do
 	return s.alerts.ListBelowThreshold(ctx, f.BranchID)
 }
 
+// RunAlertCascadeTick is the cron-callable Wave 88 tick. Runs the
+// two-step state sync (open new states, close recovered ones) then
+// bumps escalation levels for any open state past its budget.
+func (s *Service) RunAlertCascadeTick(
+	ctx context.Context, subToArea, areaToRegional time.Duration,
+) (opened, closed, escalated int, err error) {
+	if s.alerts == nil {
+		return 0, 0, 0, derrors.New(derrors.KindInternal,
+			"alert.not_configured", "alert repo not wired")
+	}
+	opened, closed, err = s.alerts.SyncAlertStates(ctx)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	escalated, err = s.alerts.CascadeEscalations(ctx, subToArea, areaToRegional)
+	if err != nil {
+		return opened, closed, 0, err
+	}
+	return opened, closed, escalated, nil
+}
+
 // =====================================================================
 // Opname workflow
 // =====================================================================

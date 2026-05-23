@@ -167,6 +167,14 @@ func (h *Handler) Mount(r chi.Router) {
 			Post("/purchase-orders/{id}/receipts", h.createGoodsReceipt)
 		r.With(httpserver.RequirePermission("warehouse.po.read")).
 			Get("/goods-receipts/{id}", h.getGoodsReceipt)
+
+		// --- Wave 87 — Asset retrofit
+		// warehouse.asset.manage gates the cannibalize action; reads
+		// piggy-back on warehouse.asset.read.
+		r.With(httpserver.RequirePermission("warehouse.asset.manage")).
+			Post("/assets/{id}/retrofit", h.retrofitAsset)
+		r.With(httpserver.RequirePermission("warehouse.asset.read")).
+			Get("/assets/{id}/retrofits", h.listRetrofitsForAsset)
 	})
 
 	// WO dispatch — opt-in surface. Self-skips when WithWODispatch

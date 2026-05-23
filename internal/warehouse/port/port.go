@@ -287,6 +287,10 @@ type UseCase interface {
 	CreateGoodsReceipt(ctx context.Context, in CreateGoodsReceiptInput) (*GoodsReceiptDetail, error)
 	GetGoodsReceipt(ctx context.Context, id uuid.UUID) (*GoodsReceiptDetail, error)
 	ListGoodsReceiptsForPO(ctx context.Context, poID uuid.UUID) ([]GoodsReceiptDetail, error)
+
+	// Asset retrofit (Wave 87)
+	RetrofitAsset(ctx context.Context, in RetrofitInput) (*RetrofitResult, error)
+	ListRetrofitsForAsset(ctx context.Context, sourceAssetID uuid.UUID) ([]domain.AssetRetrofit, error)
 }
 
 // CreatePurchaseOrderInput — usecase entry point. The PO number is
@@ -374,6 +378,17 @@ type AlertRepository interface {
 	// where min_threshold IS NOT NULL AND quantity < min_threshold.
 	// branchID, when non-nil, filters to that branch and all descendants.
 	ListBelowThreshold(ctx context.Context, branchID *uuid.UUID) ([]domain.StockAlert, error)
+
+	// Wave 88 — cron-driven persistent state.
+	//
+	// SyncAlertStates opens fresh state rows for newly-below items and
+	// closes states whose underlying level has recovered. Returns
+	// (opened, closed) counts for the cron's audit log. Idempotent.
+	SyncAlertStates(ctx context.Context) (opened, closed int, err error)
+	// CascadeEscalations bumps open states up the branch chain when
+	// the time budget at the current level expires. Returns the
+	// number of rows bumped across both transitions (sub→area + area→regional).
+	CascadeEscalations(ctx context.Context, subToArea, areaToRegional time.Duration) (int, error)
 }
 
 type OpnameRepository interface {
@@ -568,4 +583,47 @@ type StockLevelDelta struct {
 	WarehouseID uuid.UUID
 	StockItemID uuid.UUID
 	Delta       float64
+}
+
+// =====================================================================
+// Wave 87 (Tier 3) — Asset Retrofit
+// =====================================================================
+
+// RetrofitInput drives the retrofit workflow. The source asset goes
+// to 'cannibalized'; a new asset is minted under the same stock_item
+// with `is_retrofit=true`. Serial / QR are optional — many retrofits
+// happen before re-labeling (PRD §8A explicitly allows this).
+type RetrofitInput struct {
+	SourceAssetID   uuid.UUID
+	NewSerialNumber string
+	NewQRCode       string
+	NewWarehouseID  uuid.UUID
+	Reason          string
+	PerformedBy     *uuid.UUID
+}
+
+// RetrofitResult — what the caller gets back so the dashboard can
+// link to both rows in the audit trail.
+type RetrofitResult struct {
+	Retrofit       domain.AssetRetrofit
+	SourceAsset    domain.Asset
+	ProducedAsset  domain.Asset
+}
+
+type AssetRetrofitRepository interface {
+	// RecordRetrofit atomically flips the source asset to cannibalized,
+	// inserts the produced asset row, records both stock_movements,
+	// and writes the asset_retrofits audit log — all in one tx.
+	RecordRetrofit(ctx context.Context, in RecordRetrofitPersist) (*RetrofitResult, error)
+	ListForSource(ctx context.Context, sourceAssetID uuid.UUID) ([]domain.AssetRetrofit, error)
+}
+
+// RecordRetrofitPersist — usecase has already built the produced
+// asset domain row + the retrofit audit row + both stock movements;
+// the repo just persists them atomically.
+type RecordRetrofitPersist struct {
+	Retrofit        domain.AssetRetrofit
+	ProducedAsset   domain.Asset
+	ConsumeMovement domain.StockMovement
+	ProduceMovement domain.StockMovement
 }
