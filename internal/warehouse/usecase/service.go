@@ -50,7 +50,10 @@ type Service struct {
 	// Wave 87 — asset retrofit. Cannibalizes a source asset and
 	// produces a new one in a single audit-logged tx.
 	assetRetrofits port.AssetRetrofitRepository
-	log            *slog.Logger
+	// Wave 89 — per-product BOM templates. The dispatch flow (later)
+	// pre-fills its BOM lines from the active template here.
+	bomTemplates port.ProductBOMTemplateRepository
+	log          *slog.Logger
 }
 
 // WithValuation attaches the platform_config reader so ListAssets +

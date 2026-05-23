@@ -64,6 +64,8 @@ func main() {
 	grRepo := warehousepg.NewGoodsReceiptRepository(pool)
 	// Wave 87 — asset retrofit.
 	retrofitRepo := warehousepg.NewAssetRetrofitRepository(pool)
+	// Wave 89 — product BOM templates.
+	bomRepo := warehousepg.NewProductBOMRepository(pool)
 
 	verifier := auth.NewVerifier(cfg.JWTSecret, cfg.JWTIssuer)
 
@@ -81,7 +83,8 @@ func main() {
 		WithWODispatch(woDispatchRepo).
 		WithPurchaseOrders(poRepo).
 		WithGoodsReceipts(grRepo).
-		WithAssetRetrofits(retrofitRepo)
+		WithAssetRetrofits(retrofitRepo).
+		WithBOMTemplates(bomRepo)
 
 	handler := warehousehttp.NewHandler(svc, verifier).WithWODispatch(svc)
 	priorityHandler := warehousehttp.NewPriorityHandler(pool, verifier)

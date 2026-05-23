@@ -291,6 +291,13 @@ type UseCase interface {
 	// Asset retrofit (Wave 87)
 	RetrofitAsset(ctx context.Context, in RetrofitInput) (*RetrofitResult, error)
 	ListRetrofitsForAsset(ctx context.Context, sourceAssetID uuid.UUID) ([]domain.AssetRetrofit, error)
+
+	// Product BOM templates (Wave 89)
+	CreateBOMTemplate(ctx context.Context, in CreateBOMTemplateInput) (*BOMTemplateDetail, error)
+	GetBOMTemplate(ctx context.Context, id uuid.UUID) (*BOMTemplateDetail, error)
+	GetActiveBOMTemplateForProduct(ctx context.Context, productID uuid.UUID) (*BOMTemplateDetail, error)
+	ListBOMTemplatesForProduct(ctx context.Context, productID uuid.UUID, activeOnly bool) ([]domain.ProductBOMTemplate, error)
+	DeactivateBOMTemplate(ctx context.Context, id uuid.UUID) error
 }
 
 // CreatePurchaseOrderInput — usecase entry point. The PO number is
@@ -616,6 +623,38 @@ type AssetRetrofitRepository interface {
 	// and writes the asset_retrofits audit log — all in one tx.
 	RecordRetrofit(ctx context.Context, in RecordRetrofitPersist) (*RetrofitResult, error)
 	ListForSource(ctx context.Context, sourceAssetID uuid.UUID) ([]domain.AssetRetrofit, error)
+}
+
+// =====================================================================
+// Wave 89 (Tier 3) — Product BOM templates
+// =====================================================================
+
+// BOMTemplateDetail bundles header + lines.
+type BOMTemplateDetail struct {
+	Template domain.ProductBOMTemplate
+	Items    []domain.ProductBOMTemplateItem
+}
+
+type CreateBOMTemplateInput struct {
+	ProductID   uuid.UUID
+	Name        string
+	Description string
+	Items       []domain.ProductBOMTemplateItemInput
+	CreatedBy   *uuid.UUID
+}
+
+type ProductBOMTemplateRepository interface {
+	Create(ctx context.Context, tpl *domain.ProductBOMTemplate, items []domain.ProductBOMTemplateItem) error
+	FindByID(ctx context.Context, id uuid.UUID) (*BOMTemplateDetail, error)
+	// FindActiveForProduct returns the single active template for a
+	// product (the partial unique index guarantees at most one), or
+	// NotFound when no template exists yet. Used by the dispatch
+	// pre-fill flow (Wave 89b).
+	FindActiveForProduct(ctx context.Context, productID uuid.UUID) (*BOMTemplateDetail, error)
+	ListForProduct(ctx context.Context, productID uuid.UUID, activeOnly bool) ([]domain.ProductBOMTemplate, error)
+	// Deactivate flips a template's active flag; used when an operator
+	// rolls out a new BOM for the same product.
+	Deactivate(ctx context.Context, id uuid.UUID) error
 }
 
 // RecordRetrofitPersist — usecase has already built the produced

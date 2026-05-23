@@ -175,6 +175,21 @@ func (h *Handler) Mount(r chi.Router) {
 			Post("/assets/{id}/retrofit", h.retrofitAsset)
 		r.With(httpserver.RequirePermission("warehouse.asset.read")).
 			Get("/assets/{id}/retrofits", h.listRetrofitsForAsset)
+
+		// --- Wave 89 — Product BOM templates
+		// warehouse.catalog.manage gates writes; reads under
+		// warehouse.catalog.read so the dispatch flow can pull defaults
+		// without admin privileges.
+		r.With(httpserver.RequirePermission("warehouse.catalog.manage")).
+			Post("/products/{id}/bom-templates", h.createBOMTemplate)
+		r.With(httpserver.RequirePermission("warehouse.catalog.read")).
+			Get("/products/{id}/bom-templates", h.listBOMTemplatesForProduct)
+		r.With(httpserver.RequirePermission("warehouse.catalog.read")).
+			Get("/products/{id}/bom-templates/active", h.getActiveBOMForProduct)
+		r.With(httpserver.RequirePermission("warehouse.catalog.read")).
+			Get("/bom-templates/{id}", h.getBOMTemplate)
+		r.With(httpserver.RequirePermission("warehouse.catalog.manage")).
+			Post("/bom-templates/{id}/deactivate", h.deactivateBOMTemplate)
 	})
 
 	// WO dispatch — opt-in surface. Self-skips when WithWODispatch
