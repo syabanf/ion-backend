@@ -9,6 +9,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	identityhttp "github.com/ion-core/backend/internal/identity/adapter/http"
@@ -75,7 +76,22 @@ func main() {
 	// Per-IP rate limit on /auth/login: burst 10 attempts, refill 0.5/sec
 	// (= 1 attempt every 2s sustained). Slows credential stuffing from a
 	// single source; upstream WAF/CDN handles broader attacks.
-	loginRL := httpserver.NewRateLimit(10, 0.5)
+	//
+	// Wave 130: env-tunable. AUTH_LOGIN_RL_BURST + AUTH_LOGIN_RL_REFILL
+	// let SIT/load-test runs lift the cap (set both to e.g. 1000 + 500
+	// to effectively disable). Production keeps the defaults.
+	rlBurst, rlRefill := 10.0, 0.5
+	if v := os.Getenv("AUTH_LOGIN_RL_BURST"); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil && n > 0 {
+			rlBurst = n
+		}
+	}
+	if v := os.Getenv("AUTH_LOGIN_RL_REFILL"); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil && n > 0 {
+			rlRefill = n
+		}
+	}
+	loginRL := httpserver.NewRateLimit(rlBurst, rlRefill)
 	handler := identityhttp.NewHandler(svc, verifier).WithLoginRateLimit(loginRL)
 
 	// --- Platform/Schema System v1 ---

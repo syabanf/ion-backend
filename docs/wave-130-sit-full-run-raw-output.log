@@ -1,0 +1,393 @@
+=== RUN   TestAnnouncement_DispatcherPickupPredicate
+--- PASS: TestAnnouncement_DispatcherPickupPredicate (0.02s)
+=== RUN   TestAnnouncement_SeverityNormalization
+    announcement_dispatch_e2e_test.go:115: severity vocab: warning=false urgent=true (post-Wave-126 expects urgent=true)
+--- PASS: TestAnnouncement_SeverityNormalization (0.00s)
+=== RUN   TestAnnouncement_MarkReadIdempotent
+    announcement_dispatch_e2e_test.go:124: Wave 121C: required table operations.announcement_receipts missing (migration not applied?)
+--- SKIP: TestAnnouncement_MarkReadIdempotent (0.00s)
+=== RUN   TestAuditLogCaptures
+    audit_log_e2e_test.go:101: branch fd09115b-1735-4242-b691-89dc4cad1b46 not in audit log (privileged action not captured)
+--- FAIL: TestAuditLogCaptures (0.19s)
+=== RUN   TestAutoTermination
+=== RUN   TestAutoTermination/A_setup_active_customer
+=== NAME  TestAutoTermination
+    auto_termination_e2e_test.go:108: POST /api/crm/leads: want status 201, got 500 — body: {"error":{"code":"lead.ktp_sealer_missing","kind":"internal","message":"KTP_ENC_KEY is required to persist NIK"}}
+=== NAME  TestAutoTermination/A_setup_active_customer
+    testing.go:1490: test executed panic(nil) or runtime.Goexit: subtest may have called FailNow on a parent test
+--- FAIL: TestAutoTermination (0.26s)
+    --- FAIL: TestAutoTermination/A_setup_active_customer (0.16s)
+=== RUN   TestBillingCron_RunReminderTick_NoOpsWithoutDispatcher
+2026/05/24 14:21:01 WARN TODO Wave 114b — wire ReminderDispatcher component=billing.orchestration component=reminder
+    billing_orchestration_cron_observability_e2e_test.go:84: RunReminderTick returned count=0 (bridge unwired → expected 0)
+--- PASS: TestBillingCron_RunReminderTick_NoOpsWithoutDispatcher (0.05s)
+=== RUN   TestBillingCron_RunReminderTick_Idempotent
+2026/05/24 14:21:01 WARN TODO Wave 114b — wire ReminderDispatcher component=billing.orchestration component=reminder
+--- PASS: TestBillingCron_RunReminderTick_Idempotent (0.00s)
+=== RUN   TestBillingCron_RunLateFeeTick
+2026/05/24 14:21:01 WARN schema resolver not wired; falling back to billing.policies kind=billing
+2026/05/24 14:21:01 INFO late_fee tick complete component=billing.orchestration applied=1
+--- PASS: TestBillingCron_RunLateFeeTick (0.00s)
+=== RUN   TestBillingCron_RunSuspensionTick
+2026/05/24 14:21:01 WARN schema resolver not wired; falling back to billing.policies kind=suspension
+2026/05/24 14:21:01 WARN schema resolver not wired; falling back to billing.policies kind=billing
+2026/05/24 14:21:01 WARN TODO Wave 114b — wire CustomerSuspender for hard_suspend component=billing.orchestration component=suspension
+2026/05/24 14:21:01 INFO suspension tick complete component=billing.orchestration emitted=1
+    billing_orchestration_cron_observability_e2e_test.go:169: RunSuspensionTick emitted=1 (system-wide)
+--- PASS: TestBillingCron_RunSuspensionTick (0.06s)
+=== RUN   TestBillingCron_RunRestoreTick
+2026/05/24 14:21:01 WARN TODO Wave 114b — wire RADIUSRestorer component=billing.orchestration component=restore
+2026/05/24 14:21:01 WARN TODO Wave 114b — wire CustomerSuspender for restore component=billing.orchestration component=restore
+2026/05/24 14:21:01 INFO restore tick complete component=billing.orchestration restored=1
+    billing_orchestration_cron_observability_e2e_test.go:196: RunRestoreTick emitted=1 (system-wide)
+--- PASS: TestBillingCron_RunRestoreTick (0.00s)
+=== RUN   TestBillingCron_RunCommissionTriggerTick
+2026/05/24 14:21:01 WARN schema resolver not wired; falling back to billing.policies kind=commission
+2026/05/24 14:21:01 INFO commission_trigger tick complete component=billing.orchestration queued=1
+--- PASS: TestBillingCron_RunCommissionTriggerTick (0.02s)
+=== RUN   TestBroadbandHappyPath
+=== RUN   TestBroadbandHappyPath/01_branch_setup
+=== RUN   TestBroadbandHappyPath/02_odp_for_coverage
+=== RUN   TestBroadbandHappyPath/03_lead_with_coverage
+=== NAME  TestBroadbandHappyPath
+    broadband_e2e_test.go:286: POST /api/crm/leads: want status 201, got 500 — body: {"error":{"code":"lead.ktp_sealer_missing","kind":"internal","message":"KTP_ENC_KEY is required to persist NIK"}}
+=== NAME  TestBroadbandHappyPath/03_lead_with_coverage
+    testing.go:1490: test executed panic(nil) or runtime.Goexit: subtest may have called FailNow on a parent test
+--- FAIL: TestBroadbandHappyPath (0.11s)
+    --- PASS: TestBroadbandHappyPath/01_branch_setup (0.00s)
+    --- PASS: TestBroadbandHappyPath/02_odp_for_coverage (0.00s)
+    --- FAIL: TestBroadbandHappyPath/03_lead_with_coverage (0.00s)
+=== RUN   TestBulkExecutor_PlanChange_E2E
+--- PASS: TestBulkExecutor_PlanChange_E2E (0.03s)
+=== RUN   TestBulkOps_PlanChange_DryRun_NoCRMRows
+--- PASS: TestBulkOps_PlanChange_DryRun_NoCRMRows (0.01s)
+=== RUN   TestBulkOps_PlanChange_MixedOutcomes_StatusPartial
+--- PASS: TestBulkOps_PlanChange_MixedOutcomes_StatusPartial (0.01s)
+=== RUN   TestBulkOps_PlanChange_Idempotent_NoDoubleApply
+--- PASS: TestBulkOps_PlanChange_Idempotent_NoDoubleApply (0.00s)
+=== RUN   TestBulkOps_WOCreation_FrameworkPresent
+--- PASS: TestBulkOps_WOCreation_FrameworkPresent (0.01s)
+=== RUN   TestCronObservability_BootsAllFiveEvaluators
+    cron_observability_smoke_test.go:161: reminder tick ok (processed=0)
+    cron_observability_smoke_test.go:161: late_fee tick ok (processed=0)
+    cron_observability_smoke_test.go:161: suspension tick ok (processed=0)
+    cron_observability_smoke_test.go:161: restore tick ok (processed=0)
+    cron_observability_smoke_test.go:161: commission_trigger tick ok (processed=0)
+    cron_observability_smoke_test.go:180: captured logs (146 bytes):
+        time=2026-05-24T14:21:05.221+07:00 level=WARN msg="TODO Wave 114b — wire ReminderDispatcher" component=billing.orchestration component=reminder
+--- PASS: TestCronObservability_BootsAllFiveEvaluators (3.22s)
+=== RUN   TestCrossAreaDispatch
+    cross_area_dispatch_e2e_test.go:29: POST /api/crm/leads: want status 201, got 500 — body: {"error":{"code":"lead.ktp_sealer_missing","kind":"internal","message":"KTP_ENC_KEY is required to persist NIK"}}
+--- FAIL: TestCrossAreaDispatch (0.14s)
+=== RUN   TestCrossBranchCommission
+=== RUN   TestCrossBranchCommission/S01_two_branches
+=== RUN   TestCrossBranchCommission/S02_sales_user_in_branch_a
+=== RUN   TestCrossBranchCommission/S03_odp_in_branch_b
+=== RUN   TestCrossBranchCommission/S04_lead_owned_by_sales_user
+=== NAME  TestCrossBranchCommission
+    cross_branch_commission_e2e_test.go:131: POST /api/crm/leads: want status 201, got 500 — body: {"error":{"code":"lead.ktp_sealer_missing","kind":"internal","message":"KTP_ENC_KEY is required to persist NIK"}}
+=== NAME  TestCrossBranchCommission/S04_lead_owned_by_sales_user
+    testing.go:1490: test executed panic(nil) or runtime.Goexit: subtest may have called FailNow on a parent test
+--- FAIL: TestCrossBranchCommission (0.16s)
+    --- PASS: TestCrossBranchCommission/S01_two_branches (0.01s)
+    --- PASS: TestCrossBranchCommission/S02_sales_user_in_branch_a (0.05s)
+    --- PASS: TestCrossBranchCommission/S03_odp_in_branch_b (0.00s)
+    --- FAIL: TestCrossBranchCommission/S04_lead_owned_by_sales_user (0.00s)
+=== RUN   TestCrossSurfaceMobileToDashboard
+=== RUN   TestCrossSurfaceMobileToDashboard/01_admin_seeds_branch
+=== RUN   TestCrossSurfaceMobileToDashboard/02_admin_seeds_odp
+=== RUN   TestCrossSurfaceMobileToDashboard/03_sales_rep_creates_lead
+=== NAME  TestCrossSurfaceMobileToDashboard
+    cross_surface_e2e_test.go:208: POST /api/crm/leads: want status 201, got 500 — body: {"error":{"code":"lead.ktp_sealer_missing","kind":"internal","message":"KTP_ENC_KEY is required to persist NIK"}}
+=== NAME  TestCrossSurfaceMobileToDashboard/03_sales_rep_creates_lead
+    testing.go:1490: test executed panic(nil) or runtime.Goexit: subtest may have called FailNow on a parent test
+--- FAIL: TestCrossSurfaceMobileToDashboard (0.29s)
+    --- PASS: TestCrossSurfaceMobileToDashboard/01_admin_seeds_branch (0.00s)
+    --- PASS: TestCrossSurfaceMobileToDashboard/02_admin_seeds_odp (0.00s)
+    --- FAIL: TestCrossSurfaceMobileToDashboard/03_sales_rep_creates_lead (0.00s)
+=== RUN   TestDashboard_AgentQueue
+--- PASS: TestDashboard_AgentQueue (0.02s)
+=== RUN   TestDashboard_SupervisorTeamSLA
+--- PASS: TestDashboard_SupervisorTeamSLA (0.00s)
+=== RUN   TestDashboard_ChannelDistribution
+--- PASS: TestDashboard_ChannelDistribution (0.00s)
+=== RUN   TestCrossModuleSLA_Snapshot
+    cs_dashboards_e2e_test.go:245: cross-module breach count: cs=2 field=0 total=2
+--- PASS: TestCrossModuleSLA_Snapshot (0.00s)
+=== RUN   TestDashboard_AgentPerformance
+    cs_dashboards_e2e_test.go:296: agent e4193377-f67b-46b0-8b75-e6aedda90d12 perf — resolved=2 avg_resolution_sec=0.0
+--- PASS: TestDashboard_AgentPerformance (0.00s)
+=== RUN   TestCSImporter_BackfillsLegacyRow
+2026/05/24 14:21:05 INFO cs.importer run summary component=cs.importer total_legacy=1 already_migrated=0 imported=1 skipped=0 errors=0
+--- PASS: TestCSImporter_BackfillsLegacyRow (0.01s)
+=== RUN   TestCS_SLA_AppliedOnCreate
+    cs_sla_breach_e2e_test.go:195: sla_matrix_id: got 74b4467b-9716-4cc2-b2a9-b0cecadfaf5d want d5c8d73f-5bf8-4244-93f3-ff21196ed3fd
+--- FAIL: TestCS_SLA_AppliedOnCreate (0.00s)
+=== RUN   TestCS_SLA_EvaluateBreaches
+--- PASS: TestCS_SLA_EvaluateBreaches (0.00s)
+=== RUN   TestCS_SLA_PauseSubtractsFromAge
+--- PASS: TestCS_SLA_PauseSubtractsFromAge (0.00s)
+=== RUN   TestCS_ServiceRequest_FullFlow
+--- PASS: TestCS_ServiceRequest_FullFlow (0.00s)
+=== RUN   TestCS_Team_RoundRobinPicksLowestOpen
+--- PASS: TestCS_Team_RoundRobinPicksLowestOpen (0.01s)
+=== RUN   TestCS_WOFromTicket_StampsRelatedWOID
+--- PASS: TestCS_WOFromTicket_StampsRelatedWOID (0.00s)
+=== RUN   TestCS_CSAT_LowScoreSignal
+--- PASS: TestCS_CSAT_LowScoreSignal (0.00s)
+=== RUN   TestCS_TicketLifecycle_FullWalk
+--- PASS: TestCS_TicketLifecycle_FullWalk (0.00s)
+=== RUN   TestCS_TicketLifecycle_ReopenCounter
+--- PASS: TestCS_TicketLifecycle_ReopenCounter (0.00s)
+=== RUN   TestCS_Mention_ParseAndPersist
+--- PASS: TestCS_Mention_ParseAndPersist (0.00s)
+=== RUN   TestCS_Mention_EmailExclusion
+--- PASS: TestCS_Mention_EmailExclusion (0.00s)
+=== RUN   TestCS_Channels_CRUD
+    cs_ticket_lifecycle_e2e_test.go:327: code roundtrip: got "w127-ch-6ce60b0b" want "W127-CH-6ce60b0b"
+    cs_ticket_lifecycle_e2e_test.go:343: channel W127-CH-6ce60b0b missing from ListChannels result
+    cs_ticket_lifecycle_e2e_test.go:349: UpdateChannel: not_found: channel not found
+--- FAIL: TestCS_Channels_CRUD (0.00s)
+=== RUN   TestCS_TicketType_ImmutablePostCreate
+--- PASS: TestCS_TicketType_ImmutablePostCreate (0.00s)
+=== RUN   TestCS_PauseAccumulates
+--- PASS: TestCS_PauseAccumulates (1.50s)
+=== RUN   TestSalesAssistedExcessCable
+=== RUN   TestSalesAssistedExcessCable/01_branch
+=== RUN   TestSalesAssistedExcessCable/02_odp
+=== RUN   TestSalesAssistedExcessCable/03_lead_with_excess
+=== NAME  TestSalesAssistedExcessCable
+    excess_cable_e2e_test.go:127: POST /api/crm/leads: want status 201, got 500 — body: {"error":{"code":"lead.ktp_sealer_missing","kind":"internal","message":"KTP_ENC_KEY is required to persist NIK"}}
+=== NAME  TestSalesAssistedExcessCable/03_lead_with_excess
+    testing.go:1490: test executed panic(nil) or runtime.Goexit: subtest may have called FailNow on a parent test
+--- FAIL: TestSalesAssistedExcessCable (0.14s)
+    --- PASS: TestSalesAssistedExcessCable/01_branch (0.00s)
+    --- PASS: TestSalesAssistedExcessCable/02_odp (0.01s)
+    --- FAIL: TestSalesAssistedExcessCable/03_lead_with_excess (0.00s)
+=== RUN   TestFIFOLIFODispatch
+=== RUN   TestFIFOLIFODispatch/LIFO_explicit
+=== RUN   TestFIFOLIFODispatch/FIFO_oldest_first
+--- PASS: TestFIFOLIFODispatch (0.14s)
+    --- PASS: TestFIFOLIFODispatch/LIFO_explicit (0.00s)
+    --- PASS: TestFIFOLIFODispatch/FIFO_oldest_first (0.00s)
+=== RUN   TestHRIS_UpsertAndResign
+--- PASS: TestHRIS_UpsertAndResign (0.00s)
+=== RUN   TestHRIS_CommissionCessation_ResignedSalesSkipped
+2026/05/24 14:21:07 WARN skipping commission trigger: sales resigned before paid_at component=billing.orchestration invoice_id=0a5e56e5-5eec-420d-8e21-7dcf300d6e56 sales_user_id=8bf26a7a-5c70-4183-919b-9c7bfbec7030 paid_at=2026-05-24T13:21:07.670+07:00
+--- PASS: TestHRIS_CommissionCessation_ResignedSalesSkipped (0.01s)
+=== RUN   TestHRIS_CommissionCessation_ActiveSalesFires
+2026/05/24 14:21:07 WARN schema resolver not wired; falling back to billing.policies kind=commission
+2026/05/24 14:21:07 INFO commission_trigger tick complete component=billing.orchestration queued=1
+--- PASS: TestHRIS_CommissionCessation_ActiveSalesFires (0.00s)
+=== RUN   TestHRIS_EventDrainTriggersHooks
+2026/05/24 14:21:07 INFO event drain complete component=hris.event processed=2 total_in_batch=2
+--- PASS: TestHRIS_EventDrainTriggersHooks (0.00s)
+=== RUN   TestHRIS_SyncIdempotency
+2026/05/24 14:21:07 WARN TODO Wave 118 — bridge not wired component=hris.event component=commission_cessation_hook
+2026/05/24 14:21:07 WARN TODO Wave 118 — bridge not wired component=hris.event component=user_deactivator_hook
+2026/05/24 14:21:07 INFO event drain complete component=hris.event processed=1 total_in_batch=1
+2026/05/24 14:21:07 INFO hris sync complete component=hris.sync employees_upserted=3 events_ingested=1 events_processed=1 duration_ms=1
+2026/05/24 14:21:07 INFO hris sync complete component=hris.sync employees_upserted=3 events_ingested=0 events_processed=0 duration_ms=0
+--- PASS: TestHRIS_SyncIdempotency (0.00s)
+=== RUN   TestInvoicePaymentLifecycle
+    invoice_payment_e2e_test.go:37: POST /api/crm/leads: want status 201, got 500 — body: {"error":{"code":"lead.ktp_sealer_missing","kind":"internal","message":"KTP_ENC_KEY is required to persist NIK"}}
+--- FAIL: TestInvoicePaymentLifecycle (0.10s)
+=== RUN   TestInvoice_SnapshotAtIssue
+--- PASS: TestInvoice_SnapshotAtIssue (0.00s)
+=== RUN   TestInvoice_SnapshotImmutability_DistinctTimestamps
+--- PASS: TestInvoice_SnapshotImmutability_DistinctTimestamps (0.06s)
+=== RUN   TestInvoice_CreditNoteLifecycle
+--- PASS: TestInvoice_CreditNoteLifecycle (0.01s)
+=== RUN   TestInvoice_CreditNoteAmountValidation
+--- PASS: TestInvoice_CreditNoteAmountValidation (0.00s)
+=== RUN   TestInvoice_BulkJobPartial
+--- PASS: TestInvoice_BulkJobPartial (0.01s)
+=== RUN   TestInvoice_MyInvoiceCrossCustomerNotFound
+--- PASS: TestInvoice_MyInvoiceCrossCustomerNotFound (0.00s)
+=== RUN   TestLeadLifecycleTransitions
+    lead_lifecycle_e2e_test.go:109: POST /api/crm/leads: want status 201, got 500 — body: {"error":{"code":"lead.ktp_sealer_missing","kind":"internal","message":"KTP_ENC_KEY is required to persist NIK"}}
+--- FAIL: TestLeadLifecycleTransitions (0.11s)
+=== RUN   TestLeadReassignment
+    lead_reassignment_e2e_test.go:28: POST /api/crm/leads: want status 201, got 500 — body: {"error":{"code":"lead.ktp_sealer_missing","kind":"internal","message":"KTP_ENC_KEY is required to persist NIK"}}
+--- FAIL: TestLeadReassignment (0.10s)
+=== RUN   TestMaintenanceEventLifecycle
+    maintenance_event_e2e_test.go:33: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestMaintenanceEventLifecycle (0.00s)
+=== RUN   TestMaintenance_AffectedCustomersMaterialized
+    maintenance_lead_time_e2e_test.go:93: Wave 127: required column field.maintenance_events.affected_customers_snapshot missing (Wave 126 migration not applied)
+--- SKIP: TestMaintenance_AffectedCustomersMaterialized (0.00s)
+=== RUN   TestMaintenance_OverrunDetect
+--- PASS: TestMaintenance_OverrunDetect (0.01s)
+=== RUN   TestMaintenance_EscalationLadder
+    maintenance_lead_time_e2e_test.go:158: Wave 127: required column field.maintenance_events.escalation_level missing (Wave 126 migration not applied)
+--- SKIP: TestMaintenance_EscalationLadder (0.00s)
+=== RUN   TestMaintenance_ApprovalGateOverThreshold
+--- PASS: TestMaintenance_ApprovalGateOverThreshold (0.00s)
+=== RUN   TestMaintenance_LeadTimePredicate
+--- PASS: TestMaintenance_LeadTimePredicate (0.00s)
+=== RUN   TestNetdev_CommissionAndAutoActivate
+--- PASS: TestNetdev_CommissionAndAutoActivate (0.01s)
+=== RUN   TestNetdev_HealthDegradation
+--- PASS: TestNetdev_HealthDegradation (0.00s)
+=== RUN   TestNetdev_SwapFlow
+--- PASS: TestNetdev_SwapFlow (0.00s)
+=== RUN   TestNetdev_FirmwareUpgradeRetryExhausted
+--- PASS: TestNetdev_FirmwareUpgradeRetryExhausted (0.00s)
+=== RUN   TestNetdev_RMAFlow
+--- PASS: TestNetdev_RMAFlow (0.00s)
+=== RUN   TestNetdev_ComplianceScan
+--- PASS: TestNetdev_ComplianceScan (0.00s)
+=== RUN   TestNocFault_LifecycleHappyPath
+--- PASS: TestNocFault_LifecycleHappyPath (0.00s)
+=== RUN   TestNocFault_ImpactLinkingAndCount
+--- PASS: TestNocFault_ImpactLinkingAndCount (0.00s)
+=== RUN   TestNocFault_MarkDuplicate
+--- PASS: TestNocFault_MarkDuplicate (0.00s)
+=== RUN   TestNocProbe_RecordSampleAndAntiFlap
+--- PASS: TestNocProbe_RecordSampleAndAntiFlap (0.00s)
+=== RUN   TestNocFiber_AttenuationUpdatesStatus
+--- PASS: TestNocFiber_AttenuationUpdatesStatus (0.00s)
+=== RUN   TestNocTopology_SnapshotPersist
+--- PASS: TestNocTopology_SnapshotPersist (0.00s)
+=== RUN   TestNocAlertWO_ConvertFault
+--- PASS: TestNocAlertWO_ConvertFault (0.00s)
+=== RUN   TestP1P2_CustomerNotifications
+    p1p2_endpoints_test.go:70: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestP1P2_CustomerNotifications (0.00s)
+=== RUN   TestP1P2_LeadEvents_AutoWriteOnStatusChange
+    p1p2_endpoints_test.go:392: FOLLOWUP-WAVE-52: seed missing for query "SELECT id FROM crm.leads\n\t\t WHERE status NOT IN ('converted','lost','rejected')\n\t\t ORDER BY created_at DESC LIMIT 1": no rows in result set
+--- SKIP: TestP1P2_LeadEvents_AutoWriteOnStatusChange (0.00s)
+=== RUN   TestP1P2_VendorDocuments
+    p1p2_endpoints_test.go:446: POST /api/enterprise/vendors/f7d9854b-2c8d-44a4-beac-d964aa4e989f/documents: want status 201, got 401 — body: {"error":{"code":"auth.missing","kind":"unauthorized","message":"missing bearer token"}}
+--- FAIL: TestP1P2_VendorDocuments (0.00s)
+=== RUN   TestP1P2_VendorMetrics
+    p1p2_endpoints_test.go:513: GET /api/enterprise/vendors/8586c702-189f-4e0a-ba6b-e2623f917dd4/metrics: want status 200, got 401 — body: {"error":{"code":"auth.missing","kind":"unauthorized","message":"missing bearer token"}}
+--- FAIL: TestP1P2_VendorMetrics (0.00s)
+=== RUN   TestP1P2_PlanRevisions_Snapshot
+    p1p2_endpoints_test.go:549: FOLLOWUP-WAVE-52: seed missing for query "SELECT id FROM enterprise.projects LIMIT 1": no rows in result set
+--- SKIP: TestP1P2_PlanRevisions_Snapshot (0.00s)
+=== RUN   TestP1P2_GPSStreaming
+    p1p2_endpoints_test.go:585: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestP1P2_GPSStreaming (0.00s)
+=== RUN   TestP1P2_PaymentIntent_VA
+    p1p2_endpoints_test.go:162: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestP1P2_PaymentIntent_VA (0.00s)
+=== RUN   TestP1P2_ServicesCatalog_BindSLA
+    p1p2_endpoints_test.go:695: PATCH /api/enterprise/services-catalog/dd259b63-5602-460a-a9de-c672abef01c0/sla: want status 200, got 401 — body: {"error":{"code":"auth.missing","kind":"unauthorized","message":"missing bearer token"}}
+--- FAIL: TestP1P2_ServicesCatalog_BindSLA (0.00s)
+=== RUN   TestP1P2_CSReferral
+    p1p2_endpoints_test.go:732: POST /api/crm/cs-referrals: want status 201, got 401 — body: {"error":{"code":"auth.missing","kind":"unauthorized","message":"missing bearer token"}}
+--- FAIL: TestP1P2_CSReferral (0.00s)
+=== RUN   TestP1P2_PriorityInsertion
+    p1p2_endpoints_test.go:178: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestP1P2_PriorityInsertion (0.00s)
+=== RUN   TestP1P2_CrossAreaRequest
+    p1p2_endpoints_test.go:828: POST /api/field/work-orders//cross-area: want status 200, got 401 — body: {"error":{"code":"auth.missing","kind":"unauthorized","message":"missing bearer token"}}
+--- FAIL: TestP1P2_CrossAreaRequest (0.00s)
+=== RUN   TestP1P2_SuggestedPair
+    p1p2_endpoints_test.go:857: GET /api/field/work-orders//suggested-pair: want status 200, got 401 — body: {"error":{"code":"auth.missing","kind":"unauthorized","message":"missing bearer token"}}
+--- FAIL: TestP1P2_SuggestedPair (0.00s)
+=== RUN   TestP1P2_PortalActiveWOTechLocation
+    p1p2_endpoints_test.go:874: lookup customer: ERROR: invalid input syntax for type uuid: "" (SQLSTATE 22P02)
+--- FAIL: TestP1P2_PortalActiveWOTechLocation (0.00s)
+=== RUN   TestP1P2_PortalKTPReupload
+    p1p2_endpoints_test.go:894: lookup customer: ERROR: invalid input syntax for type uuid: "" (SQLSTATE 22P02)
+--- FAIL: TestP1P2_PortalKTPReupload (0.00s)
+=== RUN   TestP1P2_HRISSyncState
+    p1p2_endpoints_test.go:918: POST /api/identity/hris/sync-now: want status 200, got 401 — body: {"error":{"code":"auth.missing","kind":"unauthorized","message":"missing bearer token"}}
+--- FAIL: TestP1P2_HRISSyncState (0.00s)
+=== RUN   TestP1P2_RADIUSByCustomer
+    p1p2_endpoints_test.go:945: GET /api/network/customers//radius-state: want status 200, got 401 — body: {"error":{"code":"auth.missing","kind":"unauthorized","message":"missing bearer token"}}
+--- FAIL: TestP1P2_RADIUSByCustomer (0.00s)
+=== RUN   TestP1P2_StockDashboard
+    p1p2_endpoints_test.go:962: GET /api/warehouse/stock-dashboard: want status 200, got 401 — body: {"error":{"code":"auth.missing","kind":"unauthorized","message":"missing bearer token"}}
+--- FAIL: TestP1P2_StockDashboard (0.00s)
+=== RUN   TestP1P2_TerminationsConsolidated
+    p1p2_endpoints_test.go:997: GET /api/billing/terminations/consolidated: want status 200, got 401 — body: {"error":{"code":"auth.missing","kind":"unauthorized","message":"missing bearer token"}}
+--- FAIL: TestP1P2_TerminationsConsolidated (0.00s)
+=== RUN   TestP1P2_VendorBenchmarks
+    p1p2_endpoints_test.go:1016: GET /api/enterprise/vendor-benchmarks: want status 200, got 401 — body: {"error":{"code":"auth.missing","kind":"unauthorized","message":"missing bearer token"}}
+--- FAIL: TestP1P2_VendorBenchmarks (0.00s)
+=== RUN   TestPaymentIntent_CreateRoute_Idempotency
+--- PASS: TestPaymentIntent_CreateRoute_Idempotency (0.00s)
+=== RUN   TestPaymentIntent_WebhookSucceeded
+--- PASS: TestPaymentIntent_WebhookSucceeded (0.00s)
+=== RUN   TestPaymentIntent_WebhookDedup
+--- PASS: TestPaymentIntent_WebhookDedup (0.00s)
+=== RUN   TestPaymentIntent_WebhookSuspectSignature
+--- PASS: TestPaymentIntent_WebhookSuspectSignature (0.00s)
+=== RUN   TestPaymentIntent_RefundFlow
+--- PASS: TestPaymentIntent_RefundFlow (0.00s)
+=== RUN   TestPaymentIntent_RefundExceedsIntent
+--- PASS: TestPaymentIntent_RefundExceedsIntent (0.00s)
+=== RUN   TestPaymentIntent_GatewayList
+--- PASS: TestPaymentIntent_GatewayList (0.00s)
+=== RUN   TestPlanChangeUpgradeFlow
+    plan_change_e2e_test.go:29: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestPlanChangeUpgradeFlow (0.00s)
+=== RUN   TestPlanUpgradeApplied
+    plan_upgrade_applied_e2e_test.go:27: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestPlanUpgradeApplied (0.00s)
+=== RUN   TestPortalDataIsolation
+    portal_data_isolation_e2e_test.go:28: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestPortalDataIsolation (0.00s)
+=== RUN   TestPortalNotificationsLifecycle
+    portal_notifications_e2e_test.go:32: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestPortalNotificationsLifecycle (0.00s)
+=== RUN   TestRadiusLifecycle
+    radius_lifecycle_e2e_test.go:56: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestRadiusLifecycle (0.00s)
+=== RUN   TestRBACMatrix
+    rbac_matrix_e2e_test.go:92: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestRBACMatrix (0.00s)
+=== RUN   TestCustomerRelocationFlow
+    relocation_e2e_test.go:25: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestCustomerRelocationFlow (0.00s)
+=== RUN   TestSalesManagerCommission
+    sales_manager_commission_e2e_test.go:35: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestSalesManagerCommission (0.00s)
+=== RUN   TestCustomerSchemaOverride
+    schema_override_e2e_test.go:29: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestCustomerSchemaOverride (0.00s)
+=== RUN   TestStockDispatchLifecycle
+    stock_dispatch_e2e_test.go:29: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestStockDispatchLifecycle (0.00s)
+=== RUN   TestStockDispatchPerItemScan
+    stock_dispatch_scan_e2e_test.go:32: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestStockDispatchPerItemScan (0.00s)
+=== RUN   TestSuspensionRestorationCycle
+    suspension_restoration_e2e_test.go:37: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestSuspensionRestorationCycle (0.00s)
+=== RUN   TestTicketLifecycle
+    ticket_lifecycle_e2e_test.go:30: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestTicketLifecycle (0.00s)
+=== RUN   TestVoluntaryTermination
+    voluntary_termination_e2e_test.go:41: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestVoluntaryTermination (0.00s)
+=== RUN   TestWarehouseOpnameLifecycle
+    warehouse_opname_e2e_test.go:33: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestWarehouseOpnameLifecycle (0.00s)
+=== RUN   TestWOBASTRejection
+    wo_bast_rejection_e2e_test.go:31: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestWOBASTRejection (0.00s)
+=== RUN   TestBASTResubmissionAfterRejection
+    wo_bast_resubmission_e2e_test.go:31: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestBASTResubmissionAfterRejection (0.00s)
+=== RUN   TestWOCancellation
+    wo_cancellation_e2e_test.go:29: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestWOCancellation (0.00s)
+=== RUN   TestWOJourneyTimestamps
+    wo_journey_e2e_test.go:29: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestWOJourneyTimestamps (0.00s)
+=== RUN   TestWOPriorityInsertion
+    wo_priority_insertion_e2e_test.go:34: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestWOPriorityInsertion (0.00s)
+=== RUN   TestWOReschedule
+    wo_reschedule_e2e_test.go:23: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestWOReschedule (0.00s)
+=== RUN   TestWOSuggestedPair
+    wo_suggested_pair_e2e_test.go:31: POST /api/identity/auth/login: want status 200, got 429 — body: {"error":{"code":"auth.rate_limit","kind":"rate_limited","message":"too many login attempts, slow down","retry_after_seconds":3}}
+--- FAIL: TestWOSuggestedPair (0.00s)
+FAIL
+FAIL	github.com/ion-core/backend/test/e2e	7.546s
+FAIL
