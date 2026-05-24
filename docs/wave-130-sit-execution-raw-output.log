@@ -1,0 +1,168 @@
+=== RUN   TestAnnouncement_DispatcherPickupPredicate
+--- PASS: TestAnnouncement_DispatcherPickupPredicate (0.02s)
+=== RUN   TestAnnouncement_SeverityNormalization
+    announcement_dispatch_e2e_test.go:115: severity vocab: warning=false urgent=true (post-Wave-126 expects urgent=true)
+--- PASS: TestAnnouncement_SeverityNormalization (0.00s)
+=== RUN   TestAnnouncement_MarkReadIdempotent
+    announcement_dispatch_e2e_test.go:124: Wave 121C: required table operations.announcement_receipts missing (migration not applied?)
+--- SKIP: TestAnnouncement_MarkReadIdempotent (0.00s)
+=== RUN   TestBillingCron_RunReminderTick_NoOpsWithoutDispatcher
+2026/05/24 13:36:14 WARN TODO Wave 114b — wire ReminderDispatcher component=billing.orchestration component=reminder
+    billing_orchestration_cron_observability_e2e_test.go:84: RunReminderTick returned count=0 (bridge unwired → expected 0)
+--- PASS: TestBillingCron_RunReminderTick_NoOpsWithoutDispatcher (0.02s)
+=== RUN   TestBillingCron_RunReminderTick_Idempotent
+2026/05/24 13:36:14 WARN TODO Wave 114b — wire ReminderDispatcher component=billing.orchestration component=reminder
+--- PASS: TestBillingCron_RunReminderTick_Idempotent (0.00s)
+=== RUN   TestBillingCron_RunLateFeeTick
+2026/05/24 13:36:14 WARN schema resolver not wired; falling back to billing.policies kind=billing
+2026/05/24 13:36:14 INFO late_fee tick complete component=billing.orchestration applied=1
+--- PASS: TestBillingCron_RunLateFeeTick (0.02s)
+=== RUN   TestBillingCron_RunSuspensionTick
+2026/05/24 13:36:14 WARN schema resolver not wired; falling back to billing.policies kind=suspension
+2026/05/24 13:36:14 WARN schema resolver not wired; falling back to billing.policies kind=billing
+2026/05/24 13:36:14 WARN TODO Wave 114b — wire CustomerSuspender for hard_suspend component=billing.orchestration component=suspension
+2026/05/24 13:36:14 WARN TODO Wave 114b — wire CustomerSuspender for soft_suspend component=billing.orchestration component=suspension
+2026/05/24 13:36:14 INFO suspension tick complete component=billing.orchestration emitted=17
+    billing_orchestration_cron_observability_e2e_test.go:169: RunSuspensionTick emitted=17 (system-wide)
+--- PASS: TestBillingCron_RunSuspensionTick (0.01s)
+=== RUN   TestBillingCron_RunRestoreTick
+2026/05/24 13:36:14 WARN TODO Wave 114b — wire RADIUSRestorer component=billing.orchestration component=restore
+2026/05/24 13:36:14 WARN TODO Wave 114b — wire CustomerSuspender for restore component=billing.orchestration component=restore
+2026/05/24 13:36:14 INFO restore tick complete component=billing.orchestration restored=1
+    billing_orchestration_cron_observability_e2e_test.go:196: RunRestoreTick emitted=1 (system-wide)
+--- PASS: TestBillingCron_RunRestoreTick (0.00s)
+=== RUN   TestBillingCron_RunCommissionTriggerTick
+2026/05/24 13:36:14 WARN schema resolver not wired; falling back to billing.policies kind=commission
+2026/05/24 13:36:14 INFO commission_trigger tick complete component=billing.orchestration queued=1
+--- PASS: TestBillingCron_RunCommissionTriggerTick (0.01s)
+=== RUN   TestCronObservability_BootsAllFiveEvaluators
+    cron_observability_smoke_test.go:161: reminder tick ok (processed=0)
+    cron_observability_smoke_test.go:161: late_fee tick ok (processed=0)
+    cron_observability_smoke_test.go:161: suspension tick ok (processed=0)
+    cron_observability_smoke_test.go:161: restore tick ok (processed=0)
+    cron_observability_smoke_test.go:161: commission_trigger tick ok (processed=0)
+    cron_observability_smoke_test.go:180: captured logs (146 bytes):
+        time=2026-05-24T13:36:17.264+07:00 level=WARN msg="TODO Wave 114b — wire ReminderDispatcher" component=billing.orchestration component=reminder
+--- PASS: TestCronObservability_BootsAllFiveEvaluators (3.30s)
+=== RUN   TestCSImporter_BackfillsLegacyRow
+2026/05/24 13:36:17 INFO cs.importer run summary component=cs.importer total_legacy=25 already_migrated=0 imported=25 skipped=0 errors=0
+--- PASS: TestCSImporter_BackfillsLegacyRow (0.02s)
+=== RUN   TestCS_SLA_AppliedOnCreate
+    cs_sla_breach_e2e_test.go:195: sla_matrix_id: got fed07161-6c97-48b1-b072-2fd6ce8ed0fc want 09321083-6075-4c72-b565-abb568b337c9
+--- FAIL: TestCS_SLA_AppliedOnCreate (0.00s)
+=== RUN   TestCS_SLA_EvaluateBreaches
+--- PASS: TestCS_SLA_EvaluateBreaches (0.00s)
+=== RUN   TestCS_SLA_PauseSubtractsFromAge
+--- PASS: TestCS_SLA_PauseSubtractsFromAge (0.00s)
+=== RUN   TestCS_ServiceRequest_FullFlow
+--- PASS: TestCS_ServiceRequest_FullFlow (0.00s)
+=== RUN   TestCS_Team_RoundRobinPicksLowestOpen
+--- PASS: TestCS_Team_RoundRobinPicksLowestOpen (0.01s)
+=== RUN   TestCS_WOFromTicket_StampsRelatedWOID
+--- PASS: TestCS_WOFromTicket_StampsRelatedWOID (0.00s)
+=== RUN   TestCS_CSAT_LowScoreSignal
+--- PASS: TestCS_CSAT_LowScoreSignal (0.00s)
+=== RUN   TestCS_TicketLifecycle_FullWalk
+--- PASS: TestCS_TicketLifecycle_FullWalk (0.00s)
+=== RUN   TestCS_TicketLifecycle_ReopenCounter
+--- PASS: TestCS_TicketLifecycle_ReopenCounter (0.00s)
+=== RUN   TestCS_Mention_ParseAndPersist
+--- PASS: TestCS_Mention_ParseAndPersist (0.00s)
+=== RUN   TestCS_Mention_EmailExclusion
+--- PASS: TestCS_Mention_EmailExclusion (0.00s)
+=== RUN   TestCS_Channels_CRUD
+    cs_ticket_lifecycle_e2e_test.go:327: code roundtrip: got "w127-ch-6d80ef09" want "W127-CH-6d80ef09"
+    cs_ticket_lifecycle_e2e_test.go:343: channel W127-CH-6d80ef09 missing from ListChannels result
+    cs_ticket_lifecycle_e2e_test.go:349: UpdateChannel: not_found: channel not found
+--- FAIL: TestCS_Channels_CRUD (0.00s)
+=== RUN   TestCS_TicketType_ImmutablePostCreate
+--- PASS: TestCS_TicketType_ImmutablePostCreate (0.00s)
+=== RUN   TestCS_PauseAccumulates
+--- PASS: TestCS_PauseAccumulates (1.51s)
+=== RUN   TestHRIS_UpsertAndResign
+--- PASS: TestHRIS_UpsertAndResign (0.00s)
+=== RUN   TestHRIS_CommissionCessation_ResignedSalesSkipped
+2026/05/24 13:36:18 WARN skipping commission trigger: sales resigned before paid_at component=billing.orchestration invoice_id=0ca95448-84e8-4ccb-bcdf-8dfdd6080e84 sales_user_id=28648b6e-2ec5-4155-abbc-b93db8858018 paid_at=2026-05-24T12:36:18.915+07:00
+--- PASS: TestHRIS_CommissionCessation_ResignedSalesSkipped (0.00s)
+=== RUN   TestHRIS_CommissionCessation_ActiveSalesFires
+2026/05/24 13:36:18 WARN schema resolver not wired; falling back to billing.policies kind=commission
+2026/05/24 13:36:18 INFO commission_trigger tick complete component=billing.orchestration queued=1
+--- PASS: TestHRIS_CommissionCessation_ActiveSalesFires (0.00s)
+=== RUN   TestHRIS_EventDrainTriggersHooks
+2026/05/24 13:36:18 INFO event drain complete component=hris.event processed=2 total_in_batch=2
+--- PASS: TestHRIS_EventDrainTriggersHooks (0.00s)
+=== RUN   TestHRIS_SyncIdempotency
+2026/05/24 13:36:18 WARN TODO Wave 118 — bridge not wired component=hris.event component=commission_cessation_hook
+2026/05/24 13:36:18 WARN TODO Wave 118 — bridge not wired component=hris.event component=user_deactivator_hook
+2026/05/24 13:36:18 INFO event drain complete component=hris.event processed=1 total_in_batch=1
+2026/05/24 13:36:18 INFO hris sync complete component=hris.sync employees_upserted=3 events_ingested=1 events_processed=1 duration_ms=1
+2026/05/24 13:36:18 INFO hris sync complete component=hris.sync employees_upserted=3 events_ingested=0 events_processed=0 duration_ms=0
+--- PASS: TestHRIS_SyncIdempotency (0.00s)
+=== RUN   TestInvoice_SnapshotAtIssue
+--- PASS: TestInvoice_SnapshotAtIssue (0.00s)
+=== RUN   TestInvoice_SnapshotImmutability_DistinctTimestamps
+--- PASS: TestInvoice_SnapshotImmutability_DistinctTimestamps (0.05s)
+=== RUN   TestInvoice_CreditNoteLifecycle
+--- PASS: TestInvoice_CreditNoteLifecycle (0.01s)
+=== RUN   TestInvoice_CreditNoteAmountValidation
+--- PASS: TestInvoice_CreditNoteAmountValidation (0.00s)
+=== RUN   TestInvoice_BulkJobPartial
+    invoice_snapshot_credit_note_e2e_test.go:272: StartJob queued 32 items, want 3 — reader didn't honor customer_ids filter
+--- SKIP: TestInvoice_BulkJobPartial (0.01s)
+=== RUN   TestInvoice_MyInvoiceCrossCustomerNotFound
+--- PASS: TestInvoice_MyInvoiceCrossCustomerNotFound (0.00s)
+=== RUN   TestMaintenance_AffectedCustomersMaterialized
+    maintenance_lead_time_e2e_test.go:93: Wave 127: required column field.maintenance_events.affected_customers_snapshot missing (Wave 126 migration not applied)
+--- SKIP: TestMaintenance_AffectedCustomersMaterialized (0.00s)
+=== RUN   TestMaintenance_OverrunDetect
+--- PASS: TestMaintenance_OverrunDetect (0.01s)
+=== RUN   TestMaintenance_EscalationLadder
+    maintenance_lead_time_e2e_test.go:158: Wave 127: required column field.maintenance_events.escalation_level missing (Wave 126 migration not applied)
+--- SKIP: TestMaintenance_EscalationLadder (0.00s)
+=== RUN   TestMaintenance_ApprovalGateOverThreshold
+--- PASS: TestMaintenance_ApprovalGateOverThreshold (0.00s)
+=== RUN   TestMaintenance_LeadTimePredicate
+--- PASS: TestMaintenance_LeadTimePredicate (0.00s)
+=== RUN   TestNetdev_CommissionAndAutoActivate
+--- PASS: TestNetdev_CommissionAndAutoActivate (0.01s)
+=== RUN   TestNetdev_HealthDegradation
+--- PASS: TestNetdev_HealthDegradation (0.00s)
+=== RUN   TestNetdev_SwapFlow
+--- PASS: TestNetdev_SwapFlow (0.01s)
+=== RUN   TestNetdev_FirmwareUpgradeRetryExhausted
+--- PASS: TestNetdev_FirmwareUpgradeRetryExhausted (0.00s)
+=== RUN   TestNetdev_RMAFlow
+--- PASS: TestNetdev_RMAFlow (0.00s)
+=== RUN   TestNetdev_ComplianceScan
+--- PASS: TestNetdev_ComplianceScan (0.00s)
+=== RUN   TestNocFault_LifecycleHappyPath
+--- PASS: TestNocFault_LifecycleHappyPath (0.00s)
+=== RUN   TestNocFault_ImpactLinkingAndCount
+--- PASS: TestNocFault_ImpactLinkingAndCount (0.00s)
+=== RUN   TestNocFault_MarkDuplicate
+--- PASS: TestNocFault_MarkDuplicate (0.00s)
+=== RUN   TestNocProbe_RecordSampleAndAntiFlap
+--- PASS: TestNocProbe_RecordSampleAndAntiFlap (0.00s)
+=== RUN   TestNocFiber_AttenuationUpdatesStatus
+--- PASS: TestNocFiber_AttenuationUpdatesStatus (0.00s)
+=== RUN   TestNocTopology_SnapshotPersist
+--- PASS: TestNocTopology_SnapshotPersist (0.00s)
+=== RUN   TestNocAlertWO_ConvertFault
+--- PASS: TestNocAlertWO_ConvertFault (0.00s)
+=== RUN   TestPaymentIntent_CreateRoute_Idempotency
+--- PASS: TestPaymentIntent_CreateRoute_Idempotency (0.01s)
+=== RUN   TestPaymentIntent_WebhookSucceeded
+--- PASS: TestPaymentIntent_WebhookSucceeded (0.00s)
+=== RUN   TestPaymentIntent_WebhookDedup
+--- PASS: TestPaymentIntent_WebhookDedup (0.00s)
+=== RUN   TestPaymentIntent_WebhookSuspectSignature
+--- PASS: TestPaymentIntent_WebhookSuspectSignature (0.00s)
+=== RUN   TestPaymentIntent_RefundFlow
+--- PASS: TestPaymentIntent_RefundFlow (0.00s)
+=== RUN   TestPaymentIntent_RefundExceedsIntent
+--- PASS: TestPaymentIntent_RefundExceedsIntent (0.00s)
+=== RUN   TestPaymentIntent_GatewayList
+--- PASS: TestPaymentIntent_GatewayList (0.00s)
+FAIL
+FAIL	github.com/ion-core/backend/test/e2e	5.720s
+FAIL
