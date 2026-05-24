@@ -151,6 +151,32 @@ func (r *CreditNoteRepository) List(ctx context.Context, f port.CreditNoteFilter
 	return out, total, nil
 }
 
+// SumIssuedAndAppliedForInvoice returns the cumulative non-void
+// (issued + applied) credit-note amount bound to an invoice. Used by
+// the credit-note overissue guard in the usecase layer (Wave 128B —
+// closes TC-ISV-OVERISSUE). Voided notes are excluded so headroom they
+// reserved is released back to a future create.
+func (r *CreditNoteRepository) SumIssuedAndAppliedForInvoice(ctx context.Context, invoiceID uuid.UUID) (float64, error) {
+	var sum *float64
+	err := r.pool.QueryRow(ctx, `
+		SELECT SUM(amount)
+		FROM invoicesvc.credit_notes
+		WHERE invoice_id = $1
+		  AND status IN ('issued','applied')
+	`, invoiceID).Scan(&sum)
+	if err != nil {
+		return 0, derrors.Wrap(derrors.KindInternal,
+			"credit_note.sum_for_invoice",
+			"sum issued+applied credit notes for invoice",
+			err,
+		)
+	}
+	if sum == nil {
+		return 0, nil
+	}
+	return *sum, nil
+}
+
 // NextCreditNumber issues a fresh CN id using a date-prefixed format and
 // a per-day count. Format: CN-YYYYMMDD-NNNN. NOT cryptographically
 // monotonic across days (resets nightly), but unique-per-day + globally

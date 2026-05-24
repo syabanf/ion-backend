@@ -274,10 +274,10 @@ func TestInvoice_BulkJobPartial(t *testing.T) {
 
 	ranJob, err := h.bulk.RunJob(ctx, job.ID)
 	if err != nil {
-		// Known issue: scanBulkJob can't scan NULL error_summary into
-		// *string. This is a pre-existing bug unrelated to Wave 121C —
-		// the test surfaces it but isn't responsible for fixing it.
-		t.Skipf("RunJob: %v — pre-existing bulk_repo NULL-scan bug; bulk-job partial test skipped", err)
+		// Wave 128 closed the scanBulkJob NULL-scan bug (COALESCE on
+		// error_summary::text). If this errors now, it's a fresh bug,
+		// not the historical one — fail loudly.
+		t.Fatalf("RunJob: %v", err)
 	}
 	if ranJob.Status != invsvcdom.JobStatusPartial {
 		t.Logf("expected partial; got %q (generated=%d failed=%d total=%d). May indicate generator slipped; skipping.",

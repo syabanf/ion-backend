@@ -114,6 +114,14 @@ func main() {
 		Log:  log,
 	})
 
+	// Wave 128D — field.tickets → cs.tickets importer.
+	// Reader + writer wrap the same pool; the unique-partial-index from
+	// migration 0087 keeps the per-row INSERT idempotent across both
+	// the cron tick and the admin-triggered HTTP route.
+	legacyReader := cspg.NewLegacyTicketReader(pool)
+	canonicalWriter := cspg.NewCanonicalImporterWriter(pool)
+	importerSvc := csusecase.NewTicketImporterService(legacyReader, canonicalWriter, log)
+
 	handler := cshttp.NewHandler(ticketSvc, commentSvc, mentionSvc, channelSvc, verifier).
 		WithSLA(slaSvc).
 		WithServiceRequests(srSvc).
@@ -121,7 +129,8 @@ func main() {
 		WithWOFromTicket(wftSvc).
 		WithCSAT(csatSvc).
 		WithCommunications(commSvc).
-		WithCSDashboards(dashboardSvc)
+		WithCSDashboards(dashboardSvc).
+		WithImporter(importerSvc)
 
 	serverCfg := httpserver.DefaultConfig(cfg.HTTPPort)
 	serverCfg.PrometheusServiceName = "cs-svc"
@@ -129,6 +138,7 @@ func main() {
 	server.SetHealth("cs-svc", pool.Ping)
 	handler.Mount(server.Router)
 	handler.MountWave126(server.Router)
+	handler.MountWave128D(server.Router)
 
 	// Cron
 	runner := cscron.New(log).
@@ -137,7 +147,8 @@ func main() {
 		WithAutoCloseRepo(ticketRepo).
 		WithSLAService(slaSvc).
 		WithCSATService(csatSvc).
-		WithDashboardService(dashboardSvc)
+		WithDashboardService(dashboardSvc).
+		WithImporterService(importerSvc)
 	runner.Start(ctx)
 
 	if err := server.Run(ctx); err != nil {

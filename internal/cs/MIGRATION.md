@@ -56,20 +56,63 @@ The SLA evaluator will consume `Ticket.EffectiveAge(now)` (already
 implemented here) to compute breach. `Ticket.AddPauseDuration` is the
 extension hook for the pause-on-pending semantics.
 
-### Future wave — Backfill importer
+### Wave 128D — Backfill importer ✅ shipped
 
-A one-shot job will:
+Status: **CLOSED in Wave 128D.** Runs daily-ish via `TicketImporterTick`
+(every 4h) in `internal/cs/cron/cron.go` and ad-hoc via
+`POST /api/cs/importer/run` (gated on `cs.importer.run`, granted to
+`super_admin` + `operations_admin`).
 
-1. Read `field.tickets` ordered by `created_at`
-2. Best-effort map `category` → `ticket_type` (e.g. `no_internet` →
-   `technical`, `billing_dispute` → `billing`)
-3. Insert into `cs.tickets` with `opened_via='portal'` for portal-origin
-   rows, `opened_via='agent_internal'` for agent-on-behalf rows
-4. Copy `field.ticket_messages` → `cs.ticket_comments` 1:1
-5. Stamp `source_metadata.legacy_field_ticket_id` for traceback
+What ships:
 
-After the importer runs, the legacy paths can be deprecated and removed
-in a follow-up wave.
+1. Migration `0087_wave128d_ticket_importer.up.sql` — adds
+   `cs.tickets.legacy_id UUID` + partial unique index. NULL is allowed
+   so existing cs-native rows keep working without backfill.
+2. `internal/cs/usecase/importer.go` — `TicketImporterService.RunOnce`.
+   Anti-join select from `field.tickets`, per-row INSERT with
+   `ON CONFLICT (legacy_id) DO NOTHING`. Idempotent on re-run.
+3. `internal/cs/adapter/postgres/importer_repo.go` — pgxpool-backed
+   `LegacyTicketReader` + `CanonicalImporterWriter`.
+4. `internal/cs/adapter/http/handler_wave128d.go` —
+   `POST /api/cs/importer/run` returns the `ImportSummary` as JSON.
+5. Wiring in `cmd/cs-svc/main.go`.
+
+Mapping rules (workflow-oriented `ticket_type` from symptom-oriented
+`category`):
+
+| Legacy category (actual + prompt-rich set)                           | Canonical ticket_type |
+|----------------------------------------------------------------------|-----------------------|
+| `no_internet`, `slow_speed`, `frequent_drops`, `equipment_damage`,   | `technical`           |
+| `intermittent`, `signal_quality`, `hardware_failure`, `other`        |                       |
+| `billing_dispute`, `invoice_dispute`, `payment_issue`, `refund`      | `billing`             |
+| `service_quality`, `complaint`, `escalation`                         | `complaint`           |
+| `cancellation`, `plan_change`, `address_change`                      | `service_request`     |
+| `status_inquiry`, `info_request`                                     | `information`         |
+| _anything else_                                                      | `technical` (default + warn log) |
+
+Status mapping (legacy 5 → canonical 7):
+
+| Legacy             | Canonical           |
+|--------------------|---------------------|
+| `open`             | `open`              |
+| `in_progress`      | `in_progress`       |
+| `pending_customer` | `pending_customer`  |
+| `resolved`         | `resolved`          |
+| `closed`           | `closed`            |
+
+The two canonical-only states (`assigned`, `pending_internal`) have no
+inbound mapping — agents hand-tune post-import if needed.
+
+`ticket_no` is derived as `IMP-<legacy_ticket_number>` so the origin is
+obvious in agent UIs. `source_metadata` carries
+`{legacy_ticket_number, legacy_id, import_wave}` for trace-back.
+
+After the importer has drained the legacy backlog, the legacy write
+paths (`internal/field/adapter/http/phase2.go` + the portal CS submit
+in `internal/crm/adapter/http/portal_auth.go`) can be cut over to
+`cs.tickets` in a follow-up wave; the importer continues running so
+any straggler writes during the cut-over window are reconciled within
+4h.
 
 ### Future wave — Frontend cutover
 

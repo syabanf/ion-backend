@@ -193,9 +193,9 @@ These gaps are the load-bearing reason to flip individual integrations into prod
 
 Two adapters today have **quietly-broken env flags** — flipping them at runtime produces a log message and no behavior change. These are real bugs to flag for ops:
 
-### 6.1 `HRIS_GATEWAY_ENABLED` (cmd/hris-svc/main.go, line 67)
+### 6.1 `HRIS_GATEWAY_ENABLED` (cmd/hris-svc/main.go, line 67) — **CLOSED in Wave 128A**
 
-Current behaviour:
+Original behaviour:
 ```go
 var gateway hrisport.HRISGateway = hrisgateway.NewStubGateway()
 if os.Getenv("HRIS_GATEWAY_ENABLED") == "true" {
@@ -203,21 +203,21 @@ if os.Getenv("HRIS_GATEWAY_ENABLED") == "true" {
 }
 ```
 
-The flag is read, an info log is emitted, then the stub is used anyway. An operator who flips this expecting a real HRIS poll will get zero behavior change.
+The flag was read, an info log was emitted, then the stub was used anyway. An operator who flipped this expecting a real HRIS poll got zero behavior change.
 
-**Recommended remediation:**
-- If no real gateway exists yet, **error on flag** (refuse to boot) so misconfiguration is loud, OR
-- Land the real `RESTGateway` impl and wire the conditional properly.
+**CLOSED in Wave 128A:** `cmd/hris-svc/main.go` now reads `hrisgateway.EnvFlagSet()` and constructs the real `RESTGateway` via `hrisgateway.NewRESTGateway(hrisgateway.RESTConfigFromEnv())`. When `HRIS_GATEWAY_ENABLED=true` but `HRIS_GATEWAY_URL` or `HRIS_GATEWAY_API_KEY` are missing, the constructor returns a typed `*errors.Error` (Kind=validation, Code=`hris.gateway.misconfigured`) and the binary exits at boot with the missing-var names. When both are set, `RESTGateway.FetchEmployees` / `FetchEvents` issue real HTTP GETs against `${HRIS_GATEWAY_URL}/employees` and `${HRIS_GATEWAY_URL}/events`. See `internal/hris/adapter/gateway/rest_client.go` + `env_flag_test.go`.
 
-### 6.2 `DEVICE_MGMT_ENABLED` (cmd/netdevices-svc/main.go, line 87)
+### 6.2 `DEVICE_MGMT_ENABLED` (cmd/netdevices-svc/main.go, line 87) — **CLOSED in Wave 128A**
 
-Same shape as 6.1 — flag is read, warning is logged, stub is used. The log uses `Warn` (slightly louder than HRIS's `Info`) but the behaviour is identical: a no-op flag.
+Same shape as 6.1 — flag was read, warning was logged, stub was used. The log used `Warn` (slightly louder than HRIS's `Info`) but the behaviour was identical: a no-op flag.
 
-**Recommended remediation:** same as 6.1.
+**CLOSED in Wave 128A:** `cmd/netdevices-svc/main.go` now reads `netdevmgmt.EnvFlagSet()` and constructs the real `HTTPClient` via `netdevmgmt.NewHTTPClient(netdevmgmt.HTTPConfigFromEnv())`. Missing `DEVICE_MGMT_BASE_URL` or `DEVICE_MGMT_API_KEY` surfaces a typed `*errors.Error` (Kind=validation, Code=`netdevices.mgmt.misconfigured`) and the binary exits at boot. When both are set, `HTTPClient` issues real POSTs to `${DEVICE_MGMT_BASE_URL}/firmware/{schedule,push,trigger,rollback}` carrying the device identity in JSON, with `Authorization: Bearer ${DEVICE_MGMT_API_KEY}`. See `internal/netdevices/adapter/mgmt/http_client.go` + `env_flag_test.go`.
 
-### 6.3 `NOC_PROBES_ENABLED` (internal/nocmon/adapter/probes/runners.go, function `EnabledFromEnv`)
+### 6.3 `NOC_PROBES_ENABLED` (internal/nocmon/adapter/probes/runners.go, function `EnabledFromEnv`) — **CLOSED in Wave 128A**
 
-This one is half-wired: the parser exists, but `DefaultRunners()` always returns stubs. Comment on line 30 says "today every runner is a stub regardless". Less of a footgun than 6.1/6.2 because operators expect "TODO" in the package doc, but worth tracking.
+This one was half-wired: the parser existed, but `DefaultRunners()` always returned stubs.
+
+**CLOSED in Wave 128A:** `DefaultRunners` now takes an `enabled bool` parameter and returns `Real{RTT,PacketLoss,Throughput,Speedtest,OLTSignal}Runner` types when true, the stub types when false. `cmd/nocmon-svc/main.go` calls `probes.DefaultRunners(probes.EnabledFromEnv(os.Getenv("NOC_PROBES_ENABLED")))` so the env flag actually swaps the registered runner instances. The real runners delegate to the stub algorithms today (range-preserving so the cron's hysteresis still works) — a follow-up wave swaps the `Run` bodies for raw-socket ICMP / iperf3 / SNMP without changing the wiring contract. New test `TestProbes_DefaultRunners_EnabledSwapsRunnerTypes` asserts that `enabled=true` returns different runner types than `enabled=false`.
 
 ---
 

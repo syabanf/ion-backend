@@ -174,24 +174,26 @@ func TestOLTSignalStub_Deterministic(t *testing.T) {
 // =====================================================================
 
 func TestDefaultRunners_OnePerKind(t *testing.T) {
-	runners := DefaultRunners()
-	seen := map[domain.ProbeKind]bool{}
-	for _, r := range runners {
-		if seen[r.Kind()] {
-			t.Errorf("duplicate runner for kind %q", r.Kind())
+	for _, enabled := range []bool{false, true} {
+		runners := DefaultRunners(enabled)
+		seen := map[domain.ProbeKind]bool{}
+		for _, r := range runners {
+			if seen[r.Kind()] {
+				t.Errorf("enabled=%v: duplicate runner for kind %q", enabled, r.Kind())
+			}
+			seen[r.Kind()] = true
 		}
-		seen[r.Kind()] = true
-	}
-	want := []domain.ProbeKind{
-		domain.ProbeKindRTT,
-		domain.ProbeKindPacketLoss,
-		domain.ProbeKindThroughput,
-		domain.ProbeKindSpeedtest,
-		domain.ProbeKindOLTSignal,
-	}
-	for _, k := range want {
-		if !seen[k] {
-			t.Errorf("kind %q not represented in DefaultRunners", k)
+		want := []domain.ProbeKind{
+			domain.ProbeKindRTT,
+			domain.ProbeKindPacketLoss,
+			domain.ProbeKindThroughput,
+			domain.ProbeKindSpeedtest,
+			domain.ProbeKindOLTSignal,
+		}
+		for _, k := range want {
+			if !seen[k] {
+				t.Errorf("enabled=%v: kind %q not represented in DefaultRunners", enabled, k)
+			}
 		}
 	}
 }

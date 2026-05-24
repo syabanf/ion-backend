@@ -13,10 +13,16 @@
 //   - CSATFollowupTick      — daily (Wave 124), re-send CSAT invites
 //     for tickets resolved 24+h ago without a response. Each ticket
 //     gets a single re-invite.
+//   - TicketImporterTick    — every 4 hours (Wave 128D). Drains the
+//     field.tickets → cs.tickets backfill queue. Idempotent on re-run
+//     thanks to the legacy_id partial unique index from migration 0087.
+//     Cadence is conservative: re-runs are cheap (ANTI-JOIN returns 0
+//     rows once steady-state) but a daily cron felt too slow to clear
+//     a fresh burst of legacy writes; 4h hits a comfortable middle.
 //
 // Safe to start with nil services — a missing TicketService /
-// MentionService / SLAService / CSATService just means the loop spins
-// but no-ops.
+// MentionService / SLAService / CSATService / TicketImporterService
+// just means the loop spins but no-ops.
 package cron
 
 import (
@@ -43,6 +49,9 @@ type Runner struct {
 	// Wave 126 add-on. nil-safe.
 	dashboard *usecase.CSDashboardService
 
+	// Wave 128D add-on. nil-safe.
+	importer *usecase.TicketImporterService
+
 	mentionInterval    time.Duration
 	mentionAgeCutoff   time.Duration
 	autoCloseInterval  time.Duration
@@ -52,6 +61,7 @@ type Runner struct {
 	csatFollowupCutoff time.Duration
 	csatFollowupSpan   time.Duration
 	dashboardInterval  time.Duration
+	importerInterval   time.Duration
 }
 
 // New builds a Runner with defaults: mention reminder every 4h
@@ -71,6 +81,7 @@ func New(log *slog.Logger) *Runner {
 		csatFollowupCutoff: 24 * time.Hour,
 		csatFollowupSpan:   7 * 24 * time.Hour,
 		dashboardInterval:  15 * time.Minute,
+		importerInterval:   4 * time.Hour,
 	}
 }
 
@@ -144,6 +155,21 @@ func (r *Runner) WithSLAInterval(d time.Duration) *Runner {
 	return r
 }
 
+// WithImporterService registers the Wave 128D importer service.
+// nil → importer loop no-ops.
+func (r *Runner) WithImporterService(svc *usecase.TicketImporterService) *Runner {
+	r.importer = svc
+	return r
+}
+
+// WithImporterInterval overrides the importer cadence (default 4h).
+func (r *Runner) WithImporterInterval(d time.Duration) *Runner {
+	if d > 0 {
+		r.importerInterval = d
+	}
+	return r
+}
+
 // Start spawns the cron goroutines. The context drives shutdown —
 // cancel it and the goroutines exit between ticks.
 func (r *Runner) Start(ctx context.Context) {
@@ -161,6 +187,9 @@ func (r *Runner) Start(ctx context.Context) {
 	}
 	if r.dashboard != nil {
 		go r.runDashboardPrecomputeLoop(ctx)
+	}
+	if r.importer != nil {
+		go r.runImporterLoop(ctx)
 	}
 }
 
@@ -337,6 +366,52 @@ func (r *Runner) tickDashboardPrecompute(ctx context.Context) {
 	}
 	if n > 0 {
 		r.log.Info("cs dashboard precompute tick", "rows", n)
+	}
+}
+
+// =====================================================================
+// Wave 128D — TicketImporterTick loop
+//
+// Daily-ish cadence (default 4h) to drain field.tickets backlog into
+// cs.tickets. Idempotent on re-run via the legacy_id partial unique
+// index from migration 0087.
+// =====================================================================
+
+func (r *Runner) runImporterLoop(ctx context.Context) {
+	// 4-minute startup offset so the importer doesn't fight migration
+	// + cs-svc boot for connection-pool slots.
+	if !sleep(ctx, 4*time.Minute) {
+		return
+	}
+	r.tickImporter(ctx)
+	t := time.NewTicker(r.importerInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.tickImporter(ctx)
+		}
+	}
+}
+
+func (r *Runner) tickImporter(ctx context.Context) {
+	if r.importer == nil {
+		return
+	}
+	summary, err := r.importer.RunOnce(ctx)
+	if err != nil {
+		r.log.Warn("cs importer tick failed", "err", err)
+		return
+	}
+	if summary.Imported > 0 || summary.Errors > 0 {
+		r.log.Info("cs importer tick",
+			"total_legacy", summary.TotalLegacy,
+			"already_migrated", summary.AlreadyMigrated,
+			"imported", summary.Imported,
+			"errors", summary.Errors,
+		)
 	}
 }
 

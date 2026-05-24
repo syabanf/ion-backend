@@ -168,6 +168,7 @@ func TestMaintenanceEventLifecycle(t *testing.T) {
 
 	var team struct{ ID string `json:"id"` }
 	admin.do("POST", "/api/field/teams", map[string]any{
+		"code":           "W51-" + sx,
 		"name":           "W51 Maint Team " + sx,
 		"branch_id":      area.ID,
 		"team_leader_id": tl.ID,

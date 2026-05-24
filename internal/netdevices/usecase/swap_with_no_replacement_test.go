@@ -7,8 +7,8 @@
 // (in swap_test.go) covers the case where the caller passes a
 // non-in-stock device id; this test complements it by exercising the
 // preconditions check (swap must be approved before staging) and the
-// kind-mismatch case (which is currently NOT enforced — pinned as a
-// future gap below).
+// kind-mismatch case (closed in Wave 128B: StageSwap now validates
+// replacement.Kind == faulty.Kind).
 
 package usecase
 
@@ -62,13 +62,51 @@ func TestSwapService_StageBeforeApprove_RefusesTransition(t *testing.T) {
 	}
 }
 
-// TestSwapService_StageWithMismatchedKind_FutureContract pins the
-// future TC-NDL-* "an ONT swap should not be staged with a router
-// replacement". StageSwap today does NOT verify replacement.Kind ==
-// faulty.Kind; the test is skipped until the domain rule lands. The
-// catalog row reference is the swap subsection of TC-NDL.
+// TestSwapService_StageWithMismatchedKind_FutureContract pins TC-NDL-*
+// "an ONT swap must not be staged with a router replacement". Closed
+// in Wave 128B: StageSwap now loads the faulty device and refuses with
+// `swap.kind_mismatch` when replacement.Kind != faulty.Kind.
 func TestSwapService_StageWithMismatchedKind_FutureContract(t *testing.T) {
-	t.Skip("Wave 120 pin — kind-match enforcement is a future enhancement; " +
-		"see docs/wave-120-100pct-broadband-compliance-report.md §3e " +
-		"(catalog gap: swap kind-match validator).")
+	ctx := context.Background()
+	devRepo := newFakeDeviceRepo()
+	swapRepo := newFakeSwapRepo()
+	customer := uuid.New()
+	approver := uuid.New()
+
+	// Faulty device is an ONT.
+	faulty, _ := domain.NewDevice("F-Kind-1", domain.DeviceKindONT, "M", "V")
+	_ = devRepo.Create(ctx, faulty)
+	// Replacement is a router — wrong kind for the faulty ONT.
+	replacement, _ := domain.NewDevice("R-Kind-1", domain.DeviceKindRouter, "M", "V")
+	_ = devRepo.Create(ctx, replacement)
+
+	svc := NewSwapService(swapRepo, devRepo, nil, nil, nil)
+	swap, err := svc.RequestSwap(ctx, port.RequestSwapInput{
+		CustomerID: customer, FaultyDeviceID: faulty.ID, Reason: "ont-down",
+	})
+	if err != nil {
+		t.Fatalf("RequestSwap: %v", err)
+	}
+	if _, err := svc.ApproveSwap(ctx, swap.ID, approver); err != nil {
+		t.Fatalf("ApproveSwap: %v", err)
+	}
+
+	_, err = svc.StageSwap(ctx, swap.ID, replacement.ID)
+	if err == nil {
+		t.Fatalf("StageSwap should fail on kind mismatch (ONT faulty, router replacement)")
+	}
+	var de *derrors.Error
+	if !errors.As(err, &de) || de.Code != "swap.kind_mismatch" {
+		t.Errorf("err code = %v, want swap.kind_mismatch", err)
+	}
+	if errors.As(err, &de) && de.Kind != derrors.KindValidation {
+		t.Errorf("err kind = %s, want validation", de.Kind)
+	}
+
+	// Replacement must NOT have been allocated — the validator runs before
+	// the mutation.
+	repl, _ := devRepo.FindByID(ctx, replacement.ID)
+	if repl.Status != domain.DeviceStatusInStock {
+		t.Errorf("replacement status = %s, want in_stock (validator should not mutate on reject)", repl.Status)
+	}
 }

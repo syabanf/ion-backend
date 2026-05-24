@@ -192,16 +192,18 @@ These are the **6 TCs (4.8% of net-new Phase 1C)** that ship as documented gaps:
 
 A second class of "non-closure" worth flagging: Wave 122 audit §1 noted that `field.tickets` (Phase 1B 5-state SM) and `cs.tickets` (Phase 1C 7-state SM) are now **divergent stores for the same conceptual entity**. Wave 123 chose to **leave field.tickets in place** rather than migrate in-flight tickets — the existing portal_auth.go and phase2.go ticket routes continue to write to `field.tickets`, while new agent-side flows write to `cs.tickets`.
 
-**Open work — NOT closed in Wave 127:**
+**Status: CLOSED in Wave 128D.** ✅
 
-- An **importer wave** that backfills `cs.tickets` from `field.tickets` is planned but **not yet scheduled**. Earliest expected wave: **Wave 130** (after Wave 128 polish + Wave 129 frontend dashboards).
-- Until the importer ships, the agent-side CS UI shows only `cs.tickets` rows; legacy `field.tickets` rows are visible in the legacy admin/cs-tickets page only.
-- New customers and new tickets land in `cs.tickets` directly via the Wave 123 portal handler (`internal/cs/adapter/http/handler.go`). No data loss; just two surfaces for a transition period.
+Wave 128D ships the long-deferred importer that this report had pushed to "earliest Wave 130":
 
-This is **operationally acceptable** because:
-1. New tickets are landing in the canonical CS store.
-2. The legacy store is read-only after Wave 124's portal-auth.go cutover (Wave 124 §6).
-3. The importer is a SQL-level data move, not a domain-level reconciliation; it can be deferred without risk of structural drift.
+- Migration `0087_wave128d_ticket_importer.up.sql` adds `cs.tickets.legacy_id UUID` + partial unique index, plus a `cs.importer.run` permission granted to `super_admin` + `operations_admin`.
+- `internal/cs/usecase/importer.go` runs the backfill: anti-join SELECT from `field.tickets`, per-row INSERT with `ON CONFLICT (legacy_id) DO NOTHING`. Re-runs are no-ops once steady-state.
+- `internal/cs/cron/cron.go` schedules `TicketImporterTick` every 4 hours (with a 4-minute startup offset to dodge boot races).
+- `POST /api/cs/importer/run` (handler in `internal/cs/adapter/http/handler_wave128d.go`) exposes an admin-triggered run that returns the per-pass `ImportSummary` JSON.
+- Category → ticket_type and legacy-5-state → canonical-7-state mappings are documented in `internal/cs/MIGRATION.md` "Wave 128D — Backfill importer ✅ shipped". Unknown categories default to `technical` with a logged warning rather than erroring the whole pass.
+- Tests: `internal/cs/usecase/importer_test.go` (unit: 5-row stub seed + idempotence + mapping table) and `test/e2e/cs_importer_e2e_test.go` (build-tag `e2e`: seeds `field.tickets` via raw SQL, runs importer, asserts ticket_type + idempotent re-run).
+
+Together these close the §3g residual end-to-end — no further importer wave needed. The legacy `field.tickets` write paths can now be cut over to `cs.tickets` in a follow-up wave with confidence that the importer reconciles any straggler writes within 4 hours.
 
 ### 3h. Operational Calendar AutoSync — partial closure
 
@@ -224,9 +226,9 @@ These Phase 1B test pins remain `t.Skip`-gated and are **NOT** Phase 1C concerns
 
 | Pin | File | Status | Notes |
 |---|---|---|---|
-| `TestSwapService_StageWithMismatchedKind_FutureContract` | `internal/netdevices/usecase/swap_with_no_replacement_test.go` | Pending future "swap polish" wave | Wave 113 NDL completeness |
-| `TestCreditNoteService_OverIssue_FutureContract` | `internal/invoicesvc/usecase/credit_note_overissue_test.go` | Pending future "credit-note polish" wave | Wave 115 Invoice Svc completeness |
-| `TestH2H_AmbiguousMatch_FlaggedAsAmbiguous_Future` | `internal/payment/usecase/h2h_match_ambiguous_test.go` | Pending future "H2H ambiguity surface" wave | Wave 111 Payment Svc completeness |
+| `TestSwapService_StageWithMismatchedKind_FutureContract` | `internal/netdevices/usecase/swap_with_no_replacement_test.go` | **CLOSED in Wave 128B** | `SwapService.StageSwap` now returns `swap.kind_mismatch` when replacement.Kind ≠ faulty.Kind |
+| `TestCreditNoteService_OverIssue_FutureContract` | `internal/invoicesvc/usecase/credit_note_overissue_test.go` | **CLOSED in Wave 128B** | `NewCreditNoteServiceWithInvoices` rejects amounts exceeding `invoice.Total − Σ(issued+applied CNs)` |
+| `TestH2H_AmbiguousMatch_FlaggedAsAmbiguous_Future` | `internal/payment/usecase/h2h_match_ambiguous_test.go` | **CLOSED in Wave 128B** | `MatchStatement` flags same-tier ties as `match_method='ambiguous'` with `payment_intent_id=NULL` |
 
 ### 3j. Wave 121E environment-flag findings (Phase 1B operational, NOT Phase 1C)
 

@@ -98,6 +98,12 @@ func (s *SwapService) ApproveSwap(ctx context.Context, id, by uuid.UUID) (*domai
 // StageSwap binds a replacement device from stock. The replacement gets
 // allocated to the customer here so a concurrent allocation can't grab
 // the same unit.
+//
+// Wave 128B (closes Wave 120 t.Skip pin TC-NDL-MISMATCH): the
+// replacement's Kind must match the faulty device's Kind. We refuse
+// "swap an ONT with a router" early so the technician dispatch surface
+// can trust that the staged hardware matches the upstream PON / switch
+// expectations.
 func (s *SwapService) StageSwap(ctx context.Context, id, replacementDeviceID uuid.UUID) (*domain.DeviceSwap, error) {
 	swap, err := s.swaps.FindByID(ctx, id)
 	if err != nil {
@@ -111,6 +117,21 @@ func (s *SwapService) StageSwap(ctx context.Context, id, replacementDeviceID uui
 		return nil, derrors.Conflict(
 			"swap.replacement_not_in_stock",
 			"replacement device is not in_stock (current: "+string(replacement.Status)+")",
+		)
+	}
+	// Kind-match enforcement — load the faulty device and refuse on
+	// mismatch. This happens AFTER the in-stock check (so callers see
+	// the more actionable stock-state error first when both apply) and
+	// BEFORE we mutate any rows.
+	faulty, err := s.devices.FindByID(ctx, swap.FaultyDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	if replacement.Kind != faulty.Kind {
+		return nil, derrors.Validation(
+			"swap.kind_mismatch",
+			"replacement kind "+string(replacement.Kind)+
+				" must match faulty kind "+string(faulty.Kind),
 		)
 	}
 	// Allocate replacement to the swap's customer atomically with the

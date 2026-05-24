@@ -67,7 +67,10 @@ func main() {
 	// fails queued items with a "not configured" reason. The
 	// production hook lands when a billing-svc adapter ships.
 	snapshotSvc := invoiceusecase.NewSnapshotService(snapRepo, reader)
-	cnSvc := invoiceusecase.NewCreditNoteService(cnRepo)
+	// Wave 128B — wire the invoice-ceiling validator (closes
+	// TC-ISV-OVERISSUE). Create now refuses any amount that would push
+	// cumulative non-voided credit past invoice.Total.
+	cnSvc := invoiceusecase.NewCreditNoteServiceWithInvoices(cnRepo, reader)
 	bulkSvc := invoiceusecase.NewBulkService(bulkJobRepo, bulkItemRepo, reader, nil)
 	monitorSvc := invoiceusecase.NewMonitoringService(reader)
 

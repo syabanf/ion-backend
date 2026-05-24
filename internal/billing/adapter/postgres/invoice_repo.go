@@ -190,7 +190,59 @@ func (r *InvoiceRepository) List(ctx context.Context, f port.InvoiceListFilter) 
 		}
 		out = append(out, *v)
 	}
+	// Populate PaidAmount + OutstandingAmount for each returned view.
+	// scanInvoice can't do this — it only sees the row, not the related
+	// payments. Wave 128 (late-fee cron observability): RunLateFeeTick
+	// reads OutstandingAmount off the List view to decide eligibility;
+	// when this stayed zero the tick silently no-op'd. We backfill with
+	// one aggregate query keyed on the page we just returned.
+	if len(out) > 0 {
+		ids := make([]uuid.UUID, len(out))
+		for i := range out {
+			ids[i] = out[i].Invoice.ID
+		}
+		paidByInv, perr := r.sumPaidForInvoices(ctx, ids)
+		if perr != nil {
+			return nil, 0, perr
+		}
+		for i := range out {
+			paid := paidByInv[out[i].Invoice.ID]
+			out[i].PaidAmount = paid
+			out[i].OutstandingAmount = clampZero(out[i].Invoice.Total - paid)
+		}
+	}
 	return out, total, nil
+}
+
+// sumPaidForInvoices returns a per-invoice sum of confirmed payments.
+// Empty input yields an empty map. Used by List() to backfill
+// PaidAmount / OutstandingAmount without an N+1 query.
+func (r *InvoiceRepository) sumPaidForInvoices(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]float64, error) {
+	out := make(map[uuid.UUID]float64, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT invoice_id, COALESCE(SUM(amount), 0)
+		FROM billing.payments
+		WHERE invoice_id = ANY($1) AND status = 'confirmed'
+		GROUP BY invoice_id
+	`, ids)
+	if err != nil {
+		return nil, derrors.Wrap(derrors.KindInternal, "db.payment_sum_list", "sum payments for invoices", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			id   uuid.UUID
+			sum  float64
+		)
+		if err := rows.Scan(&id, &sum); err != nil {
+			return nil, derrors.Wrap(derrors.KindInternal, "db.payment_sum_scan", "scan payment sum", err)
+		}
+		out[id] = sum
+	}
+	return out, nil
 }
 
 func (r *InvoiceRepository) linesForInvoice(ctx context.Context, invoiceID uuid.UUID) ([]domain.LineItem, error) {

@@ -30,10 +30,15 @@ func NewBulkJobRepository(pool *pgxpool.Pool) *BulkJobRepository {
 
 var _ port.BulkJobRepository = (*BulkJobRepository)(nil)
 
+// Wave 128 fix — wrap nullable jsonb in COALESCE so the Scan into the
+// `errRaw string` / `targetRaw string` locals doesn't fail with
+// "cannot scan NULL into *string". Pre-Wave-128 callers writing
+// without error_summary tripped this and the e2e test for partial
+// bulk-jobs had to t.Skip.
 const bulkJobCols = `
-	id, kind, target_filter::text, status,
+	id, kind, COALESCE(target_filter::text, ''), status,
 	COALESCE(total_expected, 0), COALESCE(total_generated, 0), COALESCE(total_failed, 0),
-	started_at, completed_at, error_summary::text,
+	started_at, completed_at, COALESCE(error_summary::text, ''),
 	created_by, created_at, updated_at
 `
 

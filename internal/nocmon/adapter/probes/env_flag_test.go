@@ -1,22 +1,20 @@
-// Wave 121E — NOC probe runners env-flag toggle tests.
+// Wave 121E (extended in Wave 128A) — NOC probe runners env-flag toggle tests.
 //
-// The runners file documents the swap matrix as a "one-file delete"
-// (replace each stub with the real ICMP / iperf3 / SNMP runner). Today
-// NOC_PROBES_ENABLED has no effect on the package itself — the cron
-// reads the flag and would route to real runners when they exist.
+// Wave 121E pinned that NOC_PROBES_ENABLED was a half-wired flag —
+// EnabledFromEnv parsed correctly but DefaultRunners returned stubs
+// regardless.
 //
-// What we CAN pin today:
-//   - EnabledFromEnv parses correctly for documented inputs.
-//   - DefaultRunners is consistent (count + kind coverage) regardless
-//     of the env flag.
-//
-// When real runners land, this file's TestRealRunners_* test is the
-// landing pad — assert that NOC_PROBES_ENABLED=true causes
-// DefaultRunners (or a new RealRunners constructor) to return runners
-// whose Run() actually hits the network.
+// Wave 128A closes that finding: DefaultRunners now takes an `enabled`
+// parameter, and cmd/nocmon-svc passes EnabledFromEnv(env) into it.
+// The real-mode runner *types* are RealRTTRunner / RealPacketLossRunner
+// / RealThroughputRunner / RealSpeedtestRunner / RealOLTSignalRunner;
+// today their Run() bodies delegate to the stubs (range-preserving)
+// but the load-bearing fix is that the flag actually changes the
+// registered runner instances.
 package probes
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/ion-core/backend/internal/nocmon/domain"
@@ -24,9 +22,6 @@ import (
 
 // =====================================================================
 // 1) EnabledFromEnv parses both Go-canonical bool literals.
-//
-// Already covered in determinism test, but here we additionally pin
-// that bogus values default to disabled rather than panicking.
 // =====================================================================
 
 func TestProbes_EnabledFromEnv_BogusValuesDefaultToDisabled(t *testing.T) {
@@ -36,12 +31,12 @@ func TestProbes_EnabledFromEnv_BogusValuesDefaultToDisabled(t *testing.T) {
 	}{
 		{"true", true},
 		{"false", false},
-		{"", false},          // unset → disabled
-		{"truthy", false},    // junk → disabled
+		{"", false},       // unset → disabled
+		{"truthy", false}, // junk → disabled
 		{"1", true},
 		{"0", false},
 		{"TRUE", true},
-		{"Yes", false},       // not a strconv.ParseBool literal
+		{"Yes", false}, // not a strconv.ParseBool literal
 	}
 	for _, c := range cases {
 		if got := EnabledFromEnv(c.in); got != c.want {
@@ -51,43 +46,92 @@ func TestProbes_EnabledFromEnv_BogusValuesDefaultToDisabled(t *testing.T) {
 }
 
 // =====================================================================
-// 2) DefaultRunners is stable regardless of env (the env is read by the
-// cron, not by this constructor).
+// 2) DefaultRunners — coverage by kind is stable across the flag.
+//
+// Both enabled=true and enabled=false must register exactly one runner
+// per ProbeKind so the cron dispatcher doesn't end up with a hole.
 // =====================================================================
 
-func TestProbes_DefaultRunners_StableAcrossEnvFlag(t *testing.T) {
-	t.Setenv("NOC_PROBES_ENABLED", "true")
-	enabled := DefaultRunners()
-
-	t.Setenv("NOC_PROBES_ENABLED", "false")
-	disabled := DefaultRunners()
+func TestProbes_DefaultRunners_KindCoverageStableAcrossFlag(t *testing.T) {
+	enabled := DefaultRunners(true)
+	disabled := DefaultRunners(false)
 
 	if len(enabled) != len(disabled) {
-		t.Errorf("runner count drifts with env flag: enabled=%d disabled=%d", len(enabled), len(disabled))
+		t.Errorf("runner count drifts with flag: enabled=%d disabled=%d", len(enabled), len(disabled))
 	}
 	for i := range enabled {
 		if enabled[i].Kind() != disabled[i].Kind() {
-			t.Errorf("runner %d kind drifts: enabled=%q disabled=%q", i, enabled[i].Kind(), disabled[i].Kind())
+			t.Errorf("runner %d kind drifts: enabled=%q disabled=%q",
+				i, enabled[i].Kind(), disabled[i].Kind())
 		}
 	}
 }
 
 // =====================================================================
-// 3) Real-mode runners — not yet implemented.
+// 3) Wave 128A — enabled=true returns DIFFERENT runner instances than
+// enabled=false.
 //
-// When real ICMP / iperf3 / SNMP runners land, swap this Skip for a
-// real assertion that DefaultRunners returns (e.g.) *RealICMPRunner
-// when NOC_PROBES_ENABLED=true.
+// This is the load-bearing closure of Wave 121E §6.3: flipping the flag
+// must actually swap the registered runner types, not just log and
+// return the same stubs.
 // =====================================================================
 
-func TestProbes_RealMode_NotYetImplemented(t *testing.T) {
-	t.Setenv("NOC_PROBES_ENABLED", "true")
-	t.Skip("Wave 121E: real ICMP/iperf3/SNMP runners not yet implemented; tracked in production wiring readiness doc")
+func TestProbes_DefaultRunners_EnabledSwapsRunnerTypes(t *testing.T) {
+	enabled := DefaultRunners(true)
+	disabled := DefaultRunners(false)
 
-	// Future assertion shape:
-	//   runners := DefaultRunners()
-	//   for _, r := range runners {
-	//       if _, ok := r.(*RealICMPRunner); ok { ... }
-	//   }
-	_ = domain.ProbeKindRTT
+	if len(enabled) != len(disabled) {
+		t.Fatalf("runner count drifts: enabled=%d disabled=%d", len(enabled), len(disabled))
+	}
+	for i := range enabled {
+		enabledType := reflect.TypeOf(enabled[i])
+		disabledType := reflect.TypeOf(disabled[i])
+		if enabledType == disabledType {
+			t.Errorf("runner %d (kind %q): enabled and disabled returned same type %v — flag is a no-op",
+				i, enabled[i].Kind(), enabledType)
+		}
+	}
+}
+
+// =====================================================================
+// 4) Wave 128A — disabled returns the documented stub types so the
+// dev/CI default (no real network hits) is preserved.
+// =====================================================================
+
+func TestProbes_DefaultRunners_DisabledReturnsStubs(t *testing.T) {
+	disabled := DefaultRunners(false)
+	wantTypes := map[domain.ProbeKind]string{
+		domain.ProbeKindRTT:        "probes.RTTStub",
+		domain.ProbeKindPacketLoss: "probes.PacketLossStub",
+		domain.ProbeKindThroughput: "probes.ThroughputStub",
+		domain.ProbeKindSpeedtest:  "probes.SpeedtestStub",
+		domain.ProbeKindOLTSignal:  "probes.OLTSignalStub",
+	}
+	for _, r := range disabled {
+		got := reflect.TypeOf(r).String()
+		if want := wantTypes[r.Kind()]; got != want {
+			t.Errorf("kind %q: got %s, want %s", r.Kind(), got, want)
+		}
+	}
+}
+
+// =====================================================================
+// 5) Wave 128A — enabled returns the documented real-mode types.
+// =====================================================================
+
+func TestProbes_DefaultRunners_EnabledReturnsRealRunners(t *testing.T) {
+	enabled := DefaultRunners(true)
+	wantTypes := map[domain.ProbeKind]string{
+		domain.ProbeKindRTT:        "probes.RealRTTRunner",
+		domain.ProbeKindPacketLoss: "probes.RealPacketLossRunner",
+		domain.ProbeKindThroughput: "probes.RealThroughputRunner",
+		domain.ProbeKindSpeedtest:  "probes.RealSpeedtestRunner",
+		domain.ProbeKindOLTSignal:  "probes.RealOLTSignalRunner",
+	}
+	for _, r := range enabled {
+		got := reflect.TypeOf(r).String()
+		if want := wantTypes[r.Kind()]; got != want {
+			t.Errorf("kind %q: got %s, want %s", r.Kind(), got, want)
+		}
+	}
 }

@@ -172,6 +172,22 @@ func (s *stubCreditNoteRepo) NextCreditNumber(_ context.Context) (string, error)
 	return "CN-TEST-" + uuidShort(s.count), nil
 }
 
+// SumIssuedAndAppliedForInvoice sums non-voided (issued + applied) CN
+// amounts for one invoice. Wave 128B added this to the repo contract so
+// the usecase can run the invoice-ceiling validator on Create.
+func (s *stubCreditNoteRepo) SumIssuedAndAppliedForInvoice(_ context.Context, invoiceID uuid.UUID) (float64, error) {
+	var sum float64
+	for _, r := range s.rows {
+		if r.InvoiceID != invoiceID {
+			continue
+		}
+		if r.Status == domain.CreditNoteStatusIssued || r.Status == domain.CreditNoteStatusApplied {
+			sum += r.Amount
+		}
+	}
+	return sum, nil
+}
+
 func uuidShort(n int) string {
 	if n < 10 {
 		return "000" + string(rune('0'+n))

@@ -234,8 +234,18 @@ func (s *H2HService) MatchStatement(ctx context.Context, id uuid.UUID) (*domain.
 
 		// We scan the recent pending + succeeded intents (the same
 		// candidate set finance uses when reconciling by hand).
+		//
+		// Wave 128B (closes TC-PSH-006): we count the number of
+		// candidates that TIE at the best confidence tier. If 2+ pass
+		// the matcher's threshold at the SAME score, we refuse to
+		// auto-bind and flag the line as 'ambiguous' for operator
+		// review (no payment_intent_id stamped). This is the
+		// load-bearing guarantee against silently picking a random
+		// intent when amount + date alone are insufficient to
+		// disambiguate.
 		const pageSize = 100
 		offset := 0
+		tiedAtBest := 0
 		for {
 			intents, total, lerr := s.intents.List(ctx, port.IntentListFilter{
 				Status: "pending",
@@ -244,7 +254,8 @@ func (s *H2HService) MatchStatement(ctx context.Context, id uuid.UUID) (*domain.
 			if lerr != nil {
 				break
 			}
-			for _, intent := range intents {
+			for i := range intents {
+				intent := intents[i] // local copy — Go 1.21 loop-var aliasing
 				if intent.CreatedAt.Before(windowFrom) || intent.CreatedAt.After(windowTo.Add(24*time.Hour)) {
 					continue
 				}
@@ -258,8 +269,16 @@ func (s *H2HService) MatchStatement(ctx context.Context, id uuid.UUID) (*domain.
 				)
 				if conf > bestConf {
 					bestConf = conf
-					bestIntent = &intent
+					captured := intent
+					bestIntent = &captured
 					bestMethod = method
+					tiedAtBest = 1
+				} else if conf == bestConf && conf > 0 {
+					// Same-tier tie. We don't track the second intent
+					// id (operator review picks the right one in the
+					// dashboard); we just count the collision so we
+					// can flag below.
+					tiedAtBest++
 				}
 			}
 			offset += pageSize
@@ -268,14 +287,31 @@ func (s *H2HService) MatchStatement(ctx context.Context, id uuid.UUID) (*domain.
 			}
 		}
 
-		if bestIntent != nil && bestConf >= s.matchConfidenceThreshold {
+		switch {
+		case bestIntent != nil && bestConf >= s.matchConfidenceThreshold && tiedAtBest >= 2:
+			// Ambiguous: 2+ intents tie at the best score above
+			// threshold. Flag the line for operator review — do NOT
+			// stamp a payment_intent_id (the dashboard surfaces these
+			// lines for manual reconciliation).
+			l.PaymentIntentID = nil
+			c := bestConf
+			l.MatchConfidence = &c
+			l.MatchMethod = "ambiguous"
+			if err := s.h2h.UpdateLineMatch(ctx, l); err != nil {
+				unmatched++
+				continue
+			}
+			// Lines flagged 'ambiguous' count as UNMATCHED — they
+			// need operator action before the line is reconciled.
+			unmatched++
+		case bestIntent != nil && bestConf >= s.matchConfidenceThreshold:
 			l.AttachMatch(bestIntent.ID, bestConf, bestMethod)
 			if err := s.h2h.UpdateLineMatch(ctx, l); err != nil {
 				unmatched++
 				continue
 			}
 			matched++
-		} else {
+		default:
 			unmatched++
 		}
 	}

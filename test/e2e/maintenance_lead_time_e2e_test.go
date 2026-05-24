@@ -179,7 +179,7 @@ func TestMaintenance_EscalationLadder(t *testing.T) {
 	}
 }
 
-// TC-PM-003 — approval-required gate fires when affected_count > 100.
+// TC-PM-003 — approval-required gate fires when affected_customer_count > 100.
 // Wave 126 introduces approval_required + approved_by columns; until
 // then this test skips.
 func TestMaintenance_ApprovalGateOverThreshold(t *testing.T) {
@@ -192,19 +192,19 @@ func TestMaintenance_ApprovalGateOverThreshold(t *testing.T) {
 	id := seedMaintenanceEvent(t, pool, now.Add(25*time.Hour), now.Add(26*time.Hour))
 	t.Cleanup(w121cCleanup(pool, "field.maintenance_events", "id", id.String()))
 
-	// Simulate a >100 affected_count run: the materializer would also
+	// Simulate a >100 affected_customer_count run: the materializer would also
 	// flip approval_required=true.
 	w121cExec(t, pool, `
 		UPDATE field.maintenance_events
 		   SET approval_required = TRUE,
-		       affected_count    = 250
+		       affected_customer_count    = 250
 		 WHERE id = $1
 	`, id)
 
 	var required bool
 	var count int
 	if err := pool.QueryRow(ctx,
-		`SELECT approval_required, COALESCE(affected_count, 0) FROM field.maintenance_events WHERE id = $1`,
+		`SELECT approval_required, COALESCE(affected_customer_count, 0) FROM field.maintenance_events WHERE id = $1`,
 		id).Scan(&required, &count); err != nil {
 		t.Fatalf("read approval gate: %v", err)
 	}

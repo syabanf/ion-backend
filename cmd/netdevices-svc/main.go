@@ -79,12 +79,22 @@ func main() {
 	retrofitter := newRetrofitTrigger(pool, log)
 	woCreator := newWorkOrderCreator(pool, log)
 
-	// Device mgmt client — stub by default, real SDK behind
-	// DEVICE_MGMT_ENABLED=true. The stub is safe to use in prod (no
-	// side effects) so the env flag defaults to false.
+	// Device mgmt client — stub by default. When DEVICE_MGMT_ENABLED=true,
+	// build the real HTTP adapter; if required env vars are missing,
+	// refuse to boot (Wave 128A — closes Wave 121E §6.2 no-op-flag
+	// finding). The stub is safe to use in prod (no side effects) so the
+	// env flag defaults to false.
 	var mgmtClient netdevport.DeviceMgmtClient = netdevmgmt.NewStubClient(log)
-	if os.Getenv("DEVICE_MGMT_ENABLED") == "true" {
-		log.Warn("DEVICE_MGMT_ENABLED=true but no real adapter wired in Wave 113 — falling back to stub")
+	if netdevmgmt.EnvFlagSet() {
+		httpCfg := netdevmgmt.HTTPConfigFromEnv()
+		httpCfg.Logger = log
+		realClient, err := netdevmgmt.NewHTTPClient(httpCfg)
+		if err != nil {
+			log.Error("DEVICE_MGMT_ENABLED=true but configuration is invalid", "err", err)
+			os.Exit(1)
+		}
+		log.Info("DEVICE_MGMT_ENABLED=true — using real device-mgmt HTTP adapter")
+		mgmtClient = realClient
 	}
 
 	// Usecases.

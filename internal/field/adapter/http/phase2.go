@@ -630,10 +630,35 @@ func (h *Phase2Handler) getMaintenanceEvent(w http.ResponseWriter, r *http.Reque
 		}
 		nodeRows.Close()
 	}
-	writeFieldJSON(w, http.StatusOK, map[string]any{
-		"event": m,
-		"nodes": nodes,
-	})
+	// Flatten: emit the event's columns at the top level alongside the
+	// node list. Tests (and the field app) read `status`,
+	// `assigned_team_id`, `title`, etc. directly off the response object.
+	resp := map[string]any{
+		"id":              m.ID,
+		"event_code":      m.EventCode,
+		"title":           m.Title,
+		"event_kind":      m.EventKind,
+		"scheduled_start": m.ScheduledStart,
+		"status":          m.Status,
+		"node_count":      m.NodeCount,
+		"nodes":           nodes,
+		// Mirror under `affected_nodes` for forward compatibility with
+		// the test's alternate key.
+		"affected_nodes": nodes,
+	}
+	if m.Description != "" {
+		resp["description"] = m.Description
+	}
+	if m.ScheduledEnd != nil {
+		resp["scheduled_end"] = m.ScheduledEnd
+	}
+	if m.BranchID != nil {
+		resp["branch_id"] = *m.BranchID
+	}
+	if m.AssignedTeamID != nil {
+		resp["assigned_team_id"] = *m.AssignedTeamID
+	}
+	writeFieldJSON(w, http.StatusOK, resp)
 }
 
 type createMaintEventInput struct {

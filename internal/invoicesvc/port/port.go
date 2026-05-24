@@ -65,6 +65,13 @@ type CreditNoteRepository interface {
 	// fall back to a client-generated id, since credit numbers must be
 	// monotonic per regulatory audit).
 	NextCreditNumber(ctx context.Context) (string, error)
+	// SumIssuedAndAppliedForInvoice returns the cumulative amount of all
+	// non-voided credit notes (status IN ('issued','applied')) bound to
+	// the given invoice. Used by the Create-time invoice-ceiling
+	// validator (Wave 128B, closes TC-ISV-OVERISSUE). Voided + draft
+	// notes are excluded so a future Create can re-fill headroom that a
+	// voided sibling left behind.
+	SumIssuedAndAppliedForInvoice(ctx context.Context, invoiceID uuid.UUID) (float64, error)
 }
 
 // =====================================================================

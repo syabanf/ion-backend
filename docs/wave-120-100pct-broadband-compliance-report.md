@@ -370,15 +370,15 @@ requires real external integration:
 | TC-REM-008 | Reminder Schedule | Real SMS gateway roundtrip | Future "real SMS" wave |
 | TC-PSW-007 | Payment Svc — Webhook | Real Xendit webhook signature roundtrip | Future "real Xendit" wave |
 | TC-PSW-008 | Payment Svc — Webhook | Real BCA H2H webhook (DPB statement format) | Future "real BCA H2H" wave |
-| TC-PSH-006 | Payment Svc — H2H | Ambiguity flag on H2HBankLine when multiple intents tie at same confidence tier (Wave 120 t.Skip pin: `h2h_match_ambiguous_test.go::TestH2H_AmbiguousMatch_FlaggedAsAmbiguous_Future`) | Future "H2H ambiguity surface" wave |
+| TC-PSH-006 | Payment Svc — H2H | Ambiguity flag on H2HBankLine when multiple intents tie at same confidence tier (Wave 120 t.Skip pin: `h2h_match_ambiguous_test.go::TestH2H_AmbiguousMatch_FlaggedAsAmbiguous_Future`) | **CLOSED in Wave 128B** — `MatchStatement` now counts same-tier ties and writes `match_method='ambiguous'` with `payment_intent_id=NULL` for operator review |
 | TC-NSM-008 | NOC Service Monitoring | Real SNMP/OLT polling against a vendor box | Operational (NOC infrastructure) |
 | TC-NSM-009 | NOC Service Monitoring | OLT vendor-specific MIB resolution | Operational |
 | TC-FAM-006 | Fiber Attenuation | Real OLT optical-power readings | Operational |
 | TC-NDL-031 | NDL | Real SNMP/NETCONF device interrogation | Operational (Wave 113 gateway is a stub) |
 | TC-NDL-032 | NDL | Real firmware blob delivery to in-flight devices | Operational |
-| TC-NDL-MISMATCH | NDL | Swap kind-match validator (Wave 120 t.Skip pin: `swap_with_no_replacement_test.go::TestSwapService_StageWithMismatchedKind_FutureContract`) | Future "swap polish" wave |
+| TC-NDL-MISMATCH | NDL | Swap kind-match validator (Wave 120 t.Skip pin: `swap_with_no_replacement_test.go::TestSwapService_StageWithMismatchedKind_FutureContract`) | **CLOSED in Wave 128B** — `SwapService.StageSwap` now refuses with `swap.kind_mismatch` when replacement.Kind ≠ faulty.Kind |
 | TC-HRI-010 | HRIS Integration | Real HRIS gateway endpoint (no sandbox available) | Operational (HRIS vendor) |
-| TC-ISV-OVERISSUE | Invoice Snapshot Validator | Credit-note amount-vs-invoice-amount validator (Wave 120 t.Skip pin: `credit_note_overissue_test.go::TestCreditNoteService_OverIssue_FutureContract`) | Future "credit-note polish" wave |
+| TC-ISV-OVERISSUE | Invoice Snapshot Validator | Credit-note amount-vs-invoice-amount validator (Wave 120 t.Skip pin: `credit_note_overissue_test.go::TestCreditNoteService_OverIssue_FutureContract`) | **CLOSED in Wave 128B** — `NewCreditNoteServiceWithInvoices` refuses `Create` when amount > (invoice.Total − Σ issued+applied CNs); wired in `cmd/invoice-svc/main.go` |
 | TC-BR-011 | Hirarki Cabang | Polygon-overlap warning surface in admin UI (PostGIS predicate exists; warning surface is frontend) | Frontend ⏸️ Wave 119 or follow-up |
 
 Honest non-closure of these 20 is the load-bearing claim of this

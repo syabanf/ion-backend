@@ -61,11 +61,20 @@ func main() {
 	fieldQueueBridge := &fieldQueueReassignerBridge{pool: pool}
 	rbacBridge := &rbacRecalculatorBridge{pool: pool}
 
-	// Gateway — stub by default. Real gateway is wired when
-	// HRIS_GATEWAY_ENABLED=true (a future wave).
+	// Gateway — stub by default. When HRIS_GATEWAY_ENABLED=true, build
+	// the real REST adapter; if required env vars are missing, refuse
+	// to boot (Wave 128A — closes Wave 121E §6.1 no-op-flag finding).
 	var gateway hrisport.HRISGateway = hrisgateway.NewStubGateway()
-	if os.Getenv("HRIS_GATEWAY_ENABLED") == "true" {
-		log.Info("HRIS_GATEWAY_ENABLED=true — production gateway not yet wired; falling back to stub")
+	if hrisgateway.EnvFlagSet() {
+		restCfg := hrisgateway.RESTConfigFromEnv()
+		restCfg.Logger = log
+		realGW, err := hrisgateway.NewRESTGateway(restCfg)
+		if err != nil {
+			log.Error("HRIS_GATEWAY_ENABLED=true but configuration is invalid", "err", err)
+			os.Exit(1)
+		}
+		log.Info("HRIS_GATEWAY_ENABLED=true — using real REST gateway")
+		gateway = realGW
 	}
 
 	// Usecases

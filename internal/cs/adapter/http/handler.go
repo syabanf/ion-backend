@@ -47,6 +47,10 @@ type Handler struct {
 	// Wave 126 add-on. nil-safe — MountWave126 only attaches routes
 	// when the dashboard service is wired.
 	dashboard *csusecase.CSDashboardService
+
+	// Wave 128D add-on. nil-safe — MountWave128D only attaches the
+	// importer route when the service is wired.
+	importer *csusecase.TicketImporterService
 }
 
 func NewHandler(

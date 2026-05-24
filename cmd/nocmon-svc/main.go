@@ -93,7 +93,7 @@ func main() {
 	enabled := probes.EnabledFromEnv(os.Getenv("NOC_PROBES_ENABLED"))
 	cronRunner := cron.
 		New(pool, log, probeRepo, sampleRepo, fiberRepo, faultRepo, faultSvc, nil).
-		WithProbeRunners(probes.DefaultRunners()).
+		WithProbeRunners(probes.DefaultRunners(enabled)).
 		WithEnabled(enabled)
 	cronRunner.Start(ctx)
 

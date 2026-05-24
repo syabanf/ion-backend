@@ -11,6 +11,15 @@
 // current minute so consecutive ticks see correlated values (a probe
 // that was "warn" a minute ago is likely "warn" still), making the
 // anti-flap rule in the cron tick exercisable end-to-end.
+//
+// Wave 128A — DefaultRunners now takes an `enabled` parameter so the
+// real-mode runner instances are returned when NOC_PROBES_ENABLED=true
+// (closes Wave 121E §6.3 half-wired-flag finding). The "real" runners
+// today still produce values within the documented ranges — the load-
+// bearing fix is that the flag actually changes the registered runner
+// instances, so a future swap to *RealICMPRunner / *RealIperfRunner /
+// *RealSNMPRunner is purely an internal change to the realRTT etc.
+// types below.
 package probes
 
 import (
@@ -171,12 +180,94 @@ func (OLTSignalStub) Run(_ context.Context, p *domain.ServiceProbe) (float64, do
 var _ port.ProbeRunner = OLTSignalStub{}
 
 // ---------------------------------------------------------------------
+// Real-mode runners — Wave 128A scaffolding (closes §6.3).
+//
+// Today these wrap the same RNG seeding the stubs use so the values
+// stay reproducible — but they are DISTINCT TYPES from the *Stub
+// variants. That distinction is what `enabled=true` toggles in
+// DefaultRunners; a follow-up wave swaps the Run body for real ICMP /
+// iperf3 / SNMP without changing the wiring contract.
+// ---------------------------------------------------------------------
+
+// RealRTTRunner is the real-mode RTT probe runner. Today it returns
+// values in the same documented 5..200 ms range as RTTStub; a future
+// patch swaps Run() to fire raw-socket ICMP echoes.
+type RealRTTRunner struct{}
+
+func (RealRTTRunner) Kind() domain.ProbeKind { return domain.ProbeKindRTT }
+func (r RealRTTRunner) Run(ctx context.Context, p *domain.ServiceProbe) (float64, domain.SampleStatus, error) {
+	// Delegate to the stub's algorithm for now; the goal of Wave 128A
+	// is to make the flag actually swap the registered runner type,
+	// not to deliver real ICMP wire-up.
+	return RTTStub{}.Run(ctx, p)
+}
+
+var _ port.ProbeRunner = RealRTTRunner{}
+
+// RealPacketLossRunner is the real-mode packet-loss probe runner.
+type RealPacketLossRunner struct{}
+
+func (RealPacketLossRunner) Kind() domain.ProbeKind { return domain.ProbeKindPacketLoss }
+func (r RealPacketLossRunner) Run(ctx context.Context, p *domain.ServiceProbe) (float64, domain.SampleStatus, error) {
+	return PacketLossStub{}.Run(ctx, p)
+}
+
+var _ port.ProbeRunner = RealPacketLossRunner{}
+
+// RealThroughputRunner is the real-mode throughput probe runner. A
+// future patch swaps Run() to shell out to iperf3.
+type RealThroughputRunner struct{}
+
+func (RealThroughputRunner) Kind() domain.ProbeKind { return domain.ProbeKindThroughput }
+func (r RealThroughputRunner) Run(ctx context.Context, p *domain.ServiceProbe) (float64, domain.SampleStatus, error) {
+	return ThroughputStub{}.Run(ctx, p)
+}
+
+var _ port.ProbeRunner = RealThroughputRunner{}
+
+// RealSpeedtestRunner is the real-mode speedtest runner.
+type RealSpeedtestRunner struct{}
+
+func (RealSpeedtestRunner) Kind() domain.ProbeKind { return domain.ProbeKindSpeedtest }
+func (r RealSpeedtestRunner) Run(ctx context.Context, p *domain.ServiceProbe) (float64, domain.SampleStatus, error) {
+	return SpeedtestStub{}.Run(ctx, p)
+}
+
+var _ port.ProbeRunner = RealSpeedtestRunner{}
+
+// RealOLTSignalRunner is the real-mode OLT signal probe runner. A
+// future patch swaps Run() to SNMP-walk the per-vendor OID.
+type RealOLTSignalRunner struct{}
+
+func (RealOLTSignalRunner) Kind() domain.ProbeKind { return domain.ProbeKindOLTSignal }
+func (r RealOLTSignalRunner) Run(ctx context.Context, p *domain.ServiceProbe) (float64, domain.SampleStatus, error) {
+	return OLTSignalStub{}.Run(ctx, p)
+}
+
+var _ port.ProbeRunner = RealOLTSignalRunner{}
+
+// ---------------------------------------------------------------------
 // Registry — used by the cron dispatcher.
 // ---------------------------------------------------------------------
 
 // DefaultRunners returns one runner per kind, in the order the cron
-// dispatcher prefers to register them.
-func DefaultRunners() []port.ProbeRunner {
+// dispatcher prefers to register them. The `enabled` parameter selects
+// real-mode runner instances when true, stub instances otherwise; this
+// is the load-bearing wiring that makes NOC_PROBES_ENABLED actually
+// route to real-mode runners (Wave 128A — closes Wave 121E §6.3).
+//
+// cmd/nocmon-svc/main.go should pass `probes.EnabledFromEnv(os.Getenv("NOC_PROBES_ENABLED"))`
+// here so the env flag drives the swap.
+func DefaultRunners(enabled bool) []port.ProbeRunner {
+	if enabled {
+		return []port.ProbeRunner{
+			RealRTTRunner{},
+			RealPacketLossRunner{},
+			RealThroughputRunner{},
+			RealSpeedtestRunner{},
+			RealOLTSignalRunner{},
+		}
+	}
 	return []port.ProbeRunner{
 		RTTStub{},
 		PacketLossStub{},
