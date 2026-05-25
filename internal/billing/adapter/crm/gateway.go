@@ -200,12 +200,17 @@ func (g *Gateway) SuspendedCustomers(ctx context.Context) ([]port.SuspendedCusto
 }
 
 // CustomerSummary pulls a small projection used by the termination flow.
+//
+// Wave 132 — also includes customer_type so the termination WO inherits
+// the broadband/enterprise badge from the customer record. COALESCE'd
+// to '' for any legacy rows that don't carry a customer_type.
 func (g *Gateway) CustomerSummary(ctx context.Context, customerID uuid.UUID) (*port.CustomerSummary, error) {
 	row := g.pool.QueryRow(ctx, `
 		SELECT
 		  c.id, o.id, c.status, COALESCE(c.address, ''), c.branch_id,
 		  c.activated_at, c.lock_in_until,
-		  COALESCE(o.monthly_price, 0), COALESCE(o.otc_price, 0)
+		  COALESCE(o.monthly_price, 0), COALESCE(o.otc_price, 0),
+		  COALESCE(c.customer_type, '')
 		FROM crm.customers c
 		LEFT JOIN LATERAL (
 		     SELECT id, monthly_price, otc_price FROM crm.orders
@@ -215,7 +220,8 @@ func (g *Gateway) CustomerSummary(ctx context.Context, customerID uuid.UUID) (*p
 	`, customerID)
 	var s port.CustomerSummary
 	if err := row.Scan(&s.CustomerID, &s.OrderID, &s.Status, &s.Address, &s.BranchID,
-		&s.ActivatedAt, &s.LockInUntil, &s.MonthlyPrice, &s.OTCPrice); err != nil {
+		&s.ActivatedAt, &s.LockInUntil, &s.MonthlyPrice, &s.OTCPrice,
+		&s.CustomerType); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, derrors.NotFound("customer.not_found", "customer not found")
 		}

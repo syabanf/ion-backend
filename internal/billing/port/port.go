@@ -271,6 +271,10 @@ type CustomerSummary struct {
 	LockInUntil  *time.Time
 	MonthlyPrice float64
 	OTCPrice     float64
+	// Wave 132 — customer's segment from crm.customers.customer_type,
+	// surfaced here so the termination flow can pass it through to
+	// field-svc for the WO's broadband/enterprise stamp.
+	CustomerType string
 }
 
 // ReferralRow mirrors crm.referrals.
@@ -329,6 +333,10 @@ type CreateTerminationWOInput struct {
 	BranchID   *uuid.UUID
 	Notes      string
 	CreatedBy  uuid.UUID
+	// Wave 132 — customer segment classifier, forwarded to field-svc
+	// so the new WO row carries the broadband/enterprise badge. Empty
+	// string falls through to broadband per field's NormalizeCategory.
+	CustomerType string
 }
 
 // =====================================================================

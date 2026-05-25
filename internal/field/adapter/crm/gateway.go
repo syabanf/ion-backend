@@ -69,6 +69,10 @@ func (g *Gateway) OrderForWO(ctx context.Context, orderID uuid.UUID) (*port.Orde
 		Phone:      c.Phone,
 		Address:    c.Address,
 		BranchID:   c.BranchID,
+		// Wave 132 — surface the customer's segment classifier so
+		// field-svc can stamp the WO's broadband/enterprise category.
+		// Stringified here; field-svc owns the canonical normalization.
+		CustomerType: string(c.CustomerType),
 	}
 	if o.ProductID != nil {
 		// Best-effort product enrichment. Round-1 ListProducts has no

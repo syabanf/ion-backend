@@ -123,17 +123,62 @@ type WorkOrder struct {
 	// snapshot via ServiceSchemaID.
 	ProductID       *uuid.UUID
 	ServiceSchemaID *uuid.UUID
+
+	// Wave 132 — customer-segment snapshot driving the tech-app
+	// broadband/enterprise badge. Stamped at WO creation from the
+	// linked customer's customer_type and never mutated after, so a
+	// segment change on the customer doesn't retroactively re-label
+	// in-flight WOs. Must be 'broadband' or 'enterprise'; the DB
+	// CHECK constraint enforces.
+	Category WOCategory
+}
+
+// WOCategory is the customer-segment classification stamped on each WO
+// at creation time. Two values:
+//
+//	broadband  — residential / SMB broadband installs + maintenance
+//	enterprise — business / enterprise / corporate per CRM customer_type
+//
+// Anything that doesn't map cleanly defaults to broadband.
+type WOCategory string
+
+const (
+	WOCategoryBroadband  WOCategory = "broadband"
+	WOCategoryEnterprise WOCategory = "enterprise"
+)
+
+func (c WOCategory) Valid() bool {
+	return c == WOCategoryBroadband || c == WOCategoryEnterprise
+}
+
+// NormalizeCategory accepts a free-form category string (typically from
+// crm.customers.customer_type) and returns the canonical WOCategory.
+// Unknown values fall back to broadband — the Phase 1 default.
+func NormalizeCategory(raw string) WOCategory {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "enterprise", "business", "corporate":
+		return WOCategoryEnterprise
+	default:
+		return WOCategoryBroadband
+	}
 }
 
 // NewInstallationWO builds a WO from an order. The service supplies
 // customer_id + address + branch_id from the order projection.
-func NewInstallationWO(orderID *uuid.UUID, customerID uuid.UUID, address string) (*WorkOrder, error) {
+//
+// Wave 132 — the caller passes the customer's category (derived from
+// customer_type via NormalizeCategory) so the WO row carries its own
+// broadband/enterprise snapshot. Defaults to broadband if zero-value.
+func NewInstallationWO(orderID *uuid.UUID, customerID uuid.UUID, address string, category WOCategory) (*WorkOrder, error) {
 	address = strings.TrimSpace(address)
 	if customerID == uuid.Nil {
 		return nil, errors.Validation("wo.customer_required", "customer_id is required")
 	}
 	if address == "" {
 		return nil, errors.Validation("wo.address_required", "address is required")
+	}
+	if !category.Valid() {
+		category = WOCategoryBroadband
 	}
 	return &WorkOrder{
 		ID:          uuid.New(),
@@ -142,6 +187,7 @@ func NewInstallationWO(orderID *uuid.UUID, customerID uuid.UUID, address string)
 		CustomerID:  customerID,
 		WOType:      WOTypeNewInstallation,
 		ProductType: "broadband",
+		Category:    category,
 		Address:     address,
 		Priority:    PriorityMedium,
 		Status:      WOStatusCreated,
@@ -154,13 +200,19 @@ func NewInstallationWO(orderID *uuid.UUID, customerID uuid.UUID, address string)
 // auto-suspension-driven flows. Same shape as installation; the checklist
 // template lookup uses (termination, broadband, "") to find the right
 // checklist (device-retrieval BAST).
-func NewTerminationWO(orderID *uuid.UUID, customerID uuid.UUID, address string) (*WorkOrder, error) {
+//
+// Wave 132 — category snapshot like NewInstallationWO. Termination WOs
+// inherit the segment that the customer had at termination time.
+func NewTerminationWO(orderID *uuid.UUID, customerID uuid.UUID, address string, category WOCategory) (*WorkOrder, error) {
 	address = strings.TrimSpace(address)
 	if customerID == uuid.Nil {
 		return nil, errors.Validation("wo.customer_required", "customer_id is required")
 	}
 	if address == "" {
 		return nil, errors.Validation("wo.address_required", "address is required")
+	}
+	if !category.Valid() {
+		category = WOCategoryBroadband
 	}
 	return &WorkOrder{
 		ID:          uuid.New(),
@@ -169,6 +221,7 @@ func NewTerminationWO(orderID *uuid.UUID, customerID uuid.UUID, address string) 
 		CustomerID:  customerID,
 		WOType:      WOTypeTermination,
 		ProductType: "broadband",
+		Category:    category,
 		Address:     address,
 		Priority:    PriorityMedium,
 		Status:      WOStatusCreated,

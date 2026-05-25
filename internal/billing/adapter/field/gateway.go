@@ -34,7 +34,10 @@ func New(pool *pgxpool.Pool) *Gateway {
 var _ port.FieldGateway = (*Gateway)(nil)
 
 func (g *Gateway) CreateTerminationWO(ctx context.Context, in port.CreateTerminationWOInput) (uuid.UUID, error) {
-	w, err := domain.NewTerminationWO(in.OrderID, in.CustomerID, in.Address)
+	// Wave 132 — pass the customer's segment so the new WO row carries
+	// a broadband/enterprise stamp consistent with field-svc's own
+	// constructor path.
+	w, err := domain.NewTerminationWO(in.OrderID, in.CustomerID, in.Address, domain.NormalizeCategory(in.CustomerType))
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -47,18 +50,21 @@ func (g *Gateway) CreateTerminationWO(ctx context.Context, in port.CreateTermina
 	w.Status = domain.WOStatusUnassigned
 	w.UpdatedAt = time.Now().UTC()
 
+	// Wave 132 — wo_category included in this direct-INSERT path too.
+	// Round-4 swap to HTTP eliminates the duplication.
 	_, err = g.pool.Exec(ctx, `
 		INSERT INTO field.work_orders (
 		    id, wo_number, order_id, customer_id, wo_type,
 		    product_type, maintenance_subtype, address, branch_id,
 		    priority, status, is_emergency, is_cross_area, notes,
-		    created_by, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16)
+		    created_by, created_at, updated_at, wo_category
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16,$17)
 	`,
 		w.ID, w.WONumber, w.OrderID, w.CustomerID, string(w.WOType),
 		w.ProductType, nullableString(w.MaintenanceSubtype), w.Address, w.BranchID,
 		string(w.Priority), string(w.Status), w.IsEmergency, w.IsCrossArea,
 		nullableString(w.Notes), w.CreatedBy, w.CreatedAt,
+		string(w.Category),
 	)
 	if err != nil {
 		return uuid.Nil, derrors.Wrap(derrors.KindInternal, "field.wo_insert", "insert termination WO", err)

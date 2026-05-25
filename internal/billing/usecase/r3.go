@@ -338,11 +338,12 @@ func (s *Service) mintTerminationWO(ctx context.Context, t *domain.TerminationRe
 		return nil
 	}
 	woID, err := s.field.CreateTerminationWO(ctx, port.CreateTerminationWOInput{
-		CustomerID: t.CustomerID,
-		OrderID:    t.OrderID,
-		Address:    summary.Address,
-		BranchID:   summary.BranchID,
-		Notes:      "Termination WO — " + string(t.Kind),
+		CustomerID:   t.CustomerID,
+		OrderID:      t.OrderID,
+		Address:      summary.Address,
+		BranchID:     summary.BranchID,
+		Notes:        "Termination WO — " + string(t.Kind),
+		CustomerType: summary.CustomerType, // Wave 132 — broadband/enterprise stamp.
 	})
 	if err != nil {
 		return err

@@ -58,10 +58,23 @@ type woDTO struct {
 	// existing clients without these fields keep working.
 	ProductID       *string `json:"product_id,omitempty"`
 	ServiceSchemaID *string `json:"service_schema_id,omitempty"`
+
+	// Wave 132 — broadband / enterprise classifier driving the
+	// tech-app badge. Always serialized (NOT omitempty) so clients
+	// can branch on category without nil-handling; legacy rows
+	// backfilled to 'broadband' by migration 0088.
+	Category string `json:"category"`
 }
 
 func toWODTO(d port.WODetail) woDTO {
 	w := d.WO
+	// Wave 132 — Category defaults to broadband for any row that
+	// hits the API before migration 0088 has been applied (defense in
+	// depth against half-rolled-out deploys).
+	category := string(w.Category)
+	if category == "" {
+		category = string(domain.WOCategoryBroadband)
+	}
 	out := woDTO{
 		ID: w.ID.String(), WONumber: w.WONumber,
 		CustomerID: w.CustomerID.String(),
@@ -78,6 +91,7 @@ func toWODTO(d port.WODetail) woDTO {
 		IsCrossArea:        w.IsCrossArea,
 		Notes:              w.Notes,
 		CreatedAt:          httpserver.FormatRFC3339(w.CreatedAt),
+		Category:           category,
 	}
 	if w.OrderID != nil {
 		s := w.OrderID.String()

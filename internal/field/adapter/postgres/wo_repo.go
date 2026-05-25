@@ -30,6 +30,9 @@ var _ port.WORepository = (*WORepository)(nil)
 // renders without N+1 lookups. Branch is pulled the same way.
 // Wave 84 (TC-WO-011) — woSelect now also returns product_id +
 // service_schema_id. Both nullable; legacy rows scan as nil.
+// Wave 132 — wo_category column carries the broadband/enterprise
+// snapshot for the tech-app badge. Defaults to 'broadband' for legacy
+// rows via the migration's NOT NULL DEFAULT; we always have a value.
 const woSelect = `
 SELECT w.id, w.wo_number, w.order_id, w.customer_id, w.wo_type,
        w.product_type, COALESCE(w.maintenance_subtype,''),
@@ -37,7 +40,7 @@ SELECT w.id, w.wo_number, w.order_id, w.customer_id, w.wo_type,
        w.scheduled_date, w.sla_due_at, w.team_id, w.team_leader_id,
        w.is_emergency, w.is_cross_area, COALESCE(w.notes,''),
        w.created_by, w.created_at, w.updated_at,
-       w.product_id, w.service_schema_id,
+       w.product_id, w.service_schema_id, w.wo_category,
        COALESCE(b.name,'') AS branch_name,
        COALESCE(b.code,'') AS branch_code,
        COALESCE(t.name,'') AS team_name,
@@ -49,22 +52,31 @@ LEFT JOIN identity.users u    ON u.id = w.team_leader_id
 `
 
 func (r *WORepository) Create(ctx context.Context, w *domain.WorkOrder) error {
-	// Wave 84 — INSERT now carries product_id + service_schema_id.
-	// Both null-safe via the pgx mapping of *uuid.UUID.
+	// Wave 84 — INSERT carries product_id + service_schema_id.
+	// Wave 132 — INSERT carries wo_category. The $20-twice pattern is
+	// intentional and reuses CreatedAt for updated_at (matches the
+	// existing convention; the WO is born with created_at == updated_at).
+	// Category defaults to broadband when zero-value so legacy callers
+	// that didn't thread the new constructor parameter still get a
+	// valid row.
+	category := string(w.Category)
+	if category == "" {
+		category = string(domain.WOCategoryBroadband)
+	}
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO field.work_orders (
 			id, wo_number, order_id, customer_id, wo_type,
 			product_type, maintenance_subtype, address, branch_id,
 			priority, status, scheduled_date, sla_due_at, team_id, team_leader_id,
 			is_emergency, is_cross_area, notes, created_by, created_at, updated_at,
-			product_id, service_schema_id
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22)
+			product_id, service_schema_id, wo_category
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22,$23)
 	`,
 		w.ID, w.WONumber, w.OrderID, w.CustomerID, string(w.WOType),
 		w.ProductType, nullableString(w.MaintenanceSubtype), w.Address, w.BranchID,
 		string(w.Priority), string(w.Status), w.ScheduledDate, w.SLADueAt, w.TeamID, w.TeamLeaderID,
 		w.IsEmergency, w.IsCrossArea, nullableString(w.Notes), w.CreatedBy, w.CreatedAt,
-		w.ProductID, w.ServiceSchemaID,
+		w.ProductID, w.ServiceSchemaID, category,
 	)
 	return mapDBError(err, "wo.create", "create work order")
 }
@@ -177,6 +189,7 @@ func scanWOHeader(row pgx.Row) (*port.WODetail, error) {
 		woType   string
 		priority string
 		status   string
+		category string
 		out      port.WODetail
 	)
 	err := row.Scan(
@@ -186,7 +199,7 @@ func scanWOHeader(row pgx.Row) (*port.WODetail, error) {
 		&w.ScheduledDate, &w.SLADueAt, &w.TeamID, &w.TeamLeaderID,
 		&w.IsEmergency, &w.IsCrossArea, &w.Notes,
 		&w.CreatedBy, &w.CreatedAt, &w.UpdatedAt,
-		&w.ProductID, &w.ServiceSchemaID,
+		&w.ProductID, &w.ServiceSchemaID, &category,
 		&out.BranchName, &out.BranchCode,
 		&out.TeamName, &out.TeamLeaderName,
 	)
@@ -199,6 +212,10 @@ func scanWOHeader(row pgx.Row) (*port.WODetail, error) {
 	w.WOType = domain.WOType(woType)
 	w.Priority = domain.Priority(priority)
 	w.Status = domain.WOStatus(status)
+	// Wave 132 — DB CHECK constraint guarantees only valid values
+	// reach this scan, but pass through NormalizeCategory defensively
+	// in case of legacy data + future enum widening.
+	w.Category = domain.NormalizeCategory(category)
 	out.WO = w
 	return &out, nil
 }

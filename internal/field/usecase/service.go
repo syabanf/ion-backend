@@ -172,7 +172,7 @@ var _ port.UseCase = (*Service)(nil)
 // the customer + address (it was looked up to mint the termination
 // request row).
 func (s *Service) CreateTerminationWO(ctx context.Context, in port.CreateTerminationWOInput) (*port.WODetail, error) {
-	w, err := domain.NewTerminationWO(in.OrderID, in.CustomerID, in.Address)
+	w, err := domain.NewTerminationWO(in.OrderID, in.CustomerID, in.Address, domain.NormalizeCategory(in.CustomerType))
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +194,7 @@ func (s *Service) CreateWOFromOrder(ctx context.Context, in port.CreateWOFromOrd
 	if err != nil {
 		return nil, err
 	}
-	w, err := domain.NewInstallationWO(&proj.OrderID, proj.CustomerID, proj.Address)
+	w, err := domain.NewInstallationWO(&proj.OrderID, proj.CustomerID, proj.Address, domain.NormalizeCategory(proj.CustomerType))
 	if err != nil {
 		return nil, err
 	}

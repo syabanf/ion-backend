@@ -42,6 +42,12 @@ type OrderProjection struct {
 	// nil for legacy orders or products without a schema slot.
 	ProductID       *uuid.UUID
 	ServiceSchemaID *uuid.UUID
+
+	// Wave 132 — customer segment classifier sourced from
+	// crm.customers.customer_type. Field-svc normalizes this via
+	// domain.NormalizeCategory() at WO creation time. Empty string
+	// → defaults to "broadband".
+	CustomerType string
 }
 
 // ActivationProjection is what the activation hook needs when an
@@ -159,13 +165,18 @@ type CreateWOFromOrderInput struct {
 // CreateTerminationWOInput is what the billing service hands the field
 // service when minting a termination WO. The caller pre-resolved
 // customer + address — we don't need the CRM gateway round-trip.
+//
+// Wave 132 — CustomerType lets the caller pass the customer's
+// classification so the WO carries the broadband/enterprise badge.
+// Empty string is OK; field-svc normalizes via domain.NormalizeCategory.
 type CreateTerminationWOInput struct {
-	CustomerID uuid.UUID
-	OrderID    *uuid.UUID
-	Address    string
-	BranchID   *uuid.UUID
-	Notes      string
-	CreatedBy  uuid.UUID
+	CustomerID   uuid.UUID
+	OrderID      *uuid.UUID
+	Address      string
+	BranchID     *uuid.UUID
+	Notes        string
+	CreatedBy    uuid.UUID
+	CustomerType string
 }
 
 type WOListFilter struct {
